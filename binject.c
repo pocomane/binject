@@ -1,0 +1,943 @@
+
+// NOTE: The code is still a bit messy, but it works.
+// TODO : CLEAN UP !
+
+#include "binject.h"
+#include <stdio.h>
+#include <string.h>
+#include "unistd.h"
+
+// ---------------------------------------------------------------------------------
+// -- Manual config - Defaults can be overwritten in an external header
+
+// Enable the main function in this source.
+#ifndef BINJECT_MAIN_APP
+#define BINJECT_MAIN_APP 1
+#endif // BINJECT_MAIN_APP
+
+// Comment line delimiters for tail tag
+#if !defined(BINJECT_COMMENT_START) || !defined(COMMEND_END)
+#define BINJECT_COMMENT_START "-- "
+#define BINJECT_COMMENT_END ""
+#endif // BINJECT_COMMENT_*
+
+// Tail tag format. NOTE: TAIL_TAG constand will be passed to a printf like
+// function. It must contain only one format specifier of the "%x" type
+#ifndef BINJECT_TAIL_STRING
+#define BINJECT_TAIL_STRING "IF THIS IS THE LAST NON-EMPTY LINE, THE SCRIPT WILL BE SEARCHED AT 0x%x." 
+#endif // BINJECT_TAIL_STRING
+
+// Size of the data for the INTERNAL ARRAY mechanism. It should be
+// a positive integer
+#ifndef BINJECT_ARRAY_SIZE
+#define BINJECT_ARRAY_SIZE (9216)
+#endif // BINJECT_ARRAY_SIZE
+
+// If the INTERNAL ARRAY mechanism was chosen, the script size will be kept
+// in the following (scanf) format. Note: A size string starting with
+// '\0' means no script in the array!
+// TODO : define the data type also (for more coherence in config) ???
+#ifndef BINJECT_ARRAY_SIZE_FORMAT
+#define BINJECT_ARRAY_SIZE_FORMAT "%u"
+#endif // BINJECT_ARRAY_SIZE_FORMAT
+
+// If the INTERNAL ARRAY mechanism was chosen, the script will be kept in
+// in a string with the following length (should be
+// compatible with BINJECT_ARRAY_SIZE_FORMAT)
+#ifndef BINJECT_ARRAY_SIZE_FORMAT_LENGTH
+#define BINJECT_ARRAY_SIZE_FORMAT_LENGTH 32
+#endif // BINJECT_ARRAY_SIZE_FORMAT_LENGTH
+
+// If the INTERNAL ARRAY mechanism was chosen, this will be placed between the
+// binary and the script. It will be checked durinng the execution to detect the
+// start of the script.
+#ifndef BINJECT_ARRAY_EDGE
+#define BINJECT_ARRAY_EDGE "\nTHE\0ARRAY\0SCRIPT\0STARTS\0JUST\0AFTER\0THESE\0TWO\0IDENTICAL\0TAGS\n"
+#endif // BINJECT_ARRAY_EDGE
+
+// If the "Append" mechanism was chosen, this will be placed between the binary
+// and the script. It will be checked to detect the start of the script.
+#ifndef BINJECT_TAIL_TAG_EDGE
+#define BINJECT_TAIL_TAG_EDGE "\0THE\0TAIL\0SCRIPT\0IS\0JUST\0AFTER\0THESE\0TWO\0IDENTICAL\0TAGS\n"
+#endif // BINJECT_TAIL_TAG_EDGE
+
+// If the main function is enabled, this callback will be called to handle
+// the script. It must be a function with the following prototype:
+//   int my_run_callback(binject_info_t * info, int argc, char **argv)
+// If not defined an internal one will be used: it will just print the script
+// to the stdout
+#ifndef BINJECT_SCRIPT_HANDLER
+#define BINJECT_SCRIPT_HANDLER binject_main_app_internal_script_handle
+#define DEFAULT_HANDLER // Do not modify this in an external header !
+#endif // BINJECT_SCRIPT_HANDLER
+
+// If the main function is enabled, this callback will be called to inject
+// the script. It must be a function with the following prototype:
+//   void my_inj_callback(binject_info_t * info, char * scr_path, char * out_path)
+// If not defined an internal one will be used to just copy the file at argv[1]
+#ifndef BINJECT_SCRIPT_INJECT
+#define BINJECT_SCRIPT_INJECT binject_main_app_internal_script_inject
+#endif // BINJECT_SCRIPT_INJECT
+
+// ---------------------------------------------------------------------------------
+// -- Automatic definition - Do not modify in an external header
+
+// When the append mechanism was chosend, this is placed at end of file.
+// It will be checked to detect where the script is. It should not contain
+// the SCRIPT_OFFSET_SEPARATOR
+#define SCRIPT_OFFSET_FORMAT BINJECT_COMMENT_START BINJECT_TAIL_STRING BINJECT_COMMENT_END
+
+#define SCRIPT_OFFSET_SEPARATOR "\n"
+#define SCRIPT_OFFSET_LINE SCRIPT_OFFSET_SEPARATOR SCRIPT_OFFSET_FORMAT SCRIPT_OFFSET_SEPARATOR
+
+// ---------------------------------------------------------------------------------
+// -- Verbosity selection
+
+// levels > 9 are for debug.
+// default = 0 = do not print nothing about the "Normal" operation
+
+static int current_verbosity_level = 10;
+static int verbosity_level(int d) { return current_verbosity_level > d; }
+
+#define verbprint(D, ...) do{ \
+  if (verbosity_level(D)) { \
+    if (verbosity_level(9)) printf("DEBUG at %d: ", __LINE__); \
+    printf(__VA_ARGS__); \
+  } \
+}while(0)
+
+// ---------------------------------------------------------------------------------
+// -- Utility stuff
+
+typedef struct {
+  FILE * binary;
+  FILE * out;
+  char * path;
+  int aux_counter;
+  int script_offset;
+  int script_size;
+} private_info_t;
+
+static private_info_t* private_info(binject_info_t * info) {
+  return (private_info_t*)&(info->hidden);
+}
+
+#define PRINT_MESSAGE(I, ...) do{ \
+  binject_info_t * macro_protect_I = (I); \
+  snprintf(macro_protect_I->last_message, \
+    sizeof(macro_protect_I->last_message)-1, \
+    __VA_ARGS__); \
+}while(0)
+
+#define ERRWRAP(C, I, E, M, N) do{ \
+  binject_info_t * macro_protect_I = (I); \
+  if (C) { \
+    macro_protect_I->last_error = -__LINE__; \
+    goto error; \
+  } \
+  macro_protect_I->last_error = BINJECT_OK; \
+}while(0)
+
+#define FILE_OPEN(I, P, M, F) ERRWRAP( \
+  (*(F) = fopen(P, M)) == 0, \
+  I, BINJECT_ERROR_OPEN, "while opening", P \
+)
+
+#define FILE_TELL(I, F, P, N) ERRWRAP( \
+  (*(P) = ftell(F)) < 0, \
+  I, BINJECT_ERROR_TELL, "while accessing", N \
+)
+
+#define FILE_GOTO(I, F, O, N) ERRWRAP( \
+  fseek(F, O, SEEK_SET) != 0, \
+  I, BINJECT_ERROR_SEEK, "while accessing", N \
+)
+
+#define FILE_GOTO_END(I, F, N) ERRWRAP( \
+  fseek(F, 0, SEEK_END) != 0, \
+  I, BINJECT_ERROR_SEEK, "while accessing", N \
+)
+
+#define FILE_GET_CHAR(I, F, B, S, N) ERRWRAP( \
+  fgetc(F) != EOF, \
+  I, BINJECT_ERROR_READ, "while reading", N \
+)
+
+#define FILE_READ(I, F, B, S, N) ERRWRAP( \
+  fread(B, 1, S, F) != (S), \
+  I, BINJECT_ERROR_READ, "while reading", N \
+)
+
+#define FILE_WRITE(I, F, B, S, N) ERRWRAP( \
+  fwrite(B, 1, S, F) != (S), \
+  I, BINJECT_ERROR_WRITE, "while writing", N \
+)
+
+#define FILE_PRINT(I, F, N, ...) ERRWRAP( \
+  fprintf(F, __VA_ARGS__) <0, \
+  I, BINJECT_ERROR_WRITE, "while writing", N \
+)
+
+static int is_ascii_text(char c){
+  if (c < ' ' && c != '\r' && c != '\n' && c != '\t') return 0;
+  if (c > '~') return 0;
+  return 1;
+}
+
+static int is_ascii_line_break(char c){
+  if (c == '\r' || c == '\n') return 1;
+  return 0;
+}
+
+static int is_ascii_whitespace(char c){
+  if (is_ascii_line_break(c)) return 1;
+  if (c == ' ' || c == '\t') return 1;
+  return 0;
+}
+
+static FILE * binject_copy_binary(binject_info_t * info, char * out_path) {
+  private_info_t * pinfo = private_info(info);
+  FILE * out = pinfo->out;
+  verbprint(8, "General - Copyng binary %s into %s\n", pinfo->path, out_path);
+
+  // TODO : CLOSE out FILE ON ERROR !!?
+
+  // Prepare the buffer
+  FILE_GOTO_END(info, pinfo->binary, 0);
+  int binary_size = 0;
+  FILE_TELL(info, pinfo->binary, &binary_size, 0);
+  FILE_GOTO(info, pinfo->binary, 0, 0);
+  int bufsize = binary_size + 1;
+  { // Scope block to avoid goto and variable length issue
+
+    // Copy the binary
+    char buf[bufsize];
+    FILE_READ(info, pinfo->binary, buf, binary_size, 0);
+    FILE_WRITE(info, out, buf, binary_size, out_path);
+  }
+
+  // All is right
+  pinfo->out = out;
+
+  return out;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR;
+  PRINT_MESSAGE(info, "[%d] Can not copy the binary\n", info->last_error);
+  return 0;
+}
+
+// ---------------------------------------------------------------------------------
+// -- Auxilary API Functions
+
+#define COMPILE_TIME_CHECK(condition) ((void)sizeof(char[!(condition)?-1:1]))
+
+void binject_binary_path(binject_info_t * info, char * path) {
+  private_info_t * pinfo = private_info(info);
+
+  // Global check. They must be in a function. Placed here to avoid
+  // "Unused function warning" or ad-hoc function export
+  COMPILE_TIME_CHECK(sizeof(binject_info_hidden_t) == sizeof(private_info_t));
+
+  if (pinfo->binary) fclose(pinfo->binary);
+  pinfo->binary = 0;
+  pinfo->path = path;
+  pinfo->script_offset = 0;
+  pinfo->script_size = 0;
+  info->last_error = BINJECT_OK;
+  info->last_message[0] = '\0';
+}
+
+void binject_set_verbosity(int d){
+  current_verbosity_level = d;
+}
+
+// ---------------------------------------------------------------------------------
+// -- Append Mechanism - Read
+
+static void search_script_backward(binject_info_t * info) {
+  private_info_t * pinfo = private_info(info);
+
+  pinfo->script_offset = 0;
+  info->last_error = BINJECT_ERROR_NO_TAG;
+  const int tagsize = sizeof(BINJECT_TAIL_TAG_EDGE) - 2;
+  int current = 0;
+  FILE_TELL(info, pinfo->binary, &current, 0);
+
+  // This wil try to match the tag two time. So it should avoid
+  // false match due the presence of the string in the the .data section
+  int match = tagsize;
+  current += 1;
+  while (!(match < -tagsize-1)) {
+
+    current -= 1;
+    if (current <= 1) break;
+    FILE_GOTO(info, pinfo->binary, current, 0);
+
+    // Select the first or second tag repetition character
+    char m;
+    if (match < 0) m = BINJECT_TAIL_TAG_EDGE[tagsize + match + 1];
+    else m = BINJECT_TAIL_TAG_EDGE[match];
+
+    char c;
+    FILE_READ(info, pinfo->binary, &c, 1, 0);
+
+    // If a match fails, it retry with the last char of the tag
+    if (m != c) {
+      match = tagsize;
+      if (match < 0) m = BINJECT_TAIL_TAG_EDGE[tagsize + match + 1];
+      else m = BINJECT_TAIL_TAG_EDGE[match];
+    }
+
+    if (m == c) {
+     match -= 1; // Test for the next char in the tag
+    } else {
+      // this stops the loop when it find a char that is not admitted in a
+      // script and that does not match the tag
+      if (!is_ascii_text(c)) break;
+    }
+  }
+
+  if (match < -tagsize-1) {
+    
+    // Tag was found
+    FILE_TELL(info, pinfo->binary, &current, 0);
+    pinfo->script_offset = current + 2 * (sizeof(BINJECT_TAIL_TAG_EDGE) -1) -1;
+    info->last_error = BINJECT_OK;
+
+  } else {
+
+    // No valid tag
+    PRINT_MESSAGE(info, "[%d] Script not found\n", info->last_error);
+    info->last_error = BINJECT_ERROR_NO_SCRIPT;
+  }
+
+  return;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_NO_SCRIPT;
+  PRINT_MESSAGE(info, "[%d] Can not find the script\n", info->last_error);
+  return;
+}
+
+static void binject_find_tail_tag(binject_info_t * info) {
+  private_info_t * pinfo = private_info(info);
+  verbprint(8, "Tail Tag - searching script from the bottom\n");
+
+  pinfo->script_offset = 0;
+  pinfo->script_size = 0;
+  info->last_error = BINJECT_ERROR_NO_SCRIPT;
+
+  if (!pinfo->binary)
+    FILE_OPEN(info, pinfo->path, "rb", &(pinfo->binary));
+
+  // Get the I, file size
+  FILE_GOTO_END(info, pinfo->binary, 0);
+  int file_size;
+  FILE_TELL(info, pinfo->binary, &file_size, 0);
+
+  // Find the last non-empty line
+  int begin_of_line = file_size;
+  int non_empty_line_found = 0;
+  int end_of_line = -1;
+  while (1) {
+
+    // Move and update position in the file
+    begin_of_line -= 1;
+    if (begin_of_line <= 1) break;
+    FILE_GOTO(info, pinfo->binary, begin_of_line, 0);
+
+    // Match an non-empty line
+    char c;
+    FILE_READ(info, pinfo->binary, &c, 1, 0);
+    if (c == SCRIPT_OFFSET_SEPARATOR[0]) {
+      if (non_empty_line_found) break;
+      end_of_line = begin_of_line;
+    }
+    if (!is_ascii_whitespace(c) && !is_ascii_line_break(c)){
+      non_empty_line_found = 1;
+    }
+  }
+  begin_of_line += 1;
+
+  // Check line
+  if (0
+  || end_of_line <= 1 || begin_of_line <= 1
+  || end_of_line - begin_of_line < sizeof(SCRIPT_OFFSET_LINE)-1
+  || end_of_line - begin_of_line > sizeof(SCRIPT_OFFSET_LINE)+64
+  ) goto error;
+
+  // Load the line
+  { // Scope block to avoid goto and variable length issue
+    char buf[end_of_line - begin_of_line + 1];
+    FILE_GOTO(info, pinfo->binary, begin_of_line, 0);
+    FILE_READ(info, pinfo->binary, buf, end_of_line - begin_of_line, 0);
+    buf[end_of_line - begin_of_line] = '\0';
+
+    // Read the script offset
+    unsigned int begin_of_script = 0;
+    if (1 != sscanf(buf, SCRIPT_OFFSET_FORMAT, &begin_of_script))
+      goto error;
+    int size = begin_of_line - begin_of_script - 1;
+    pinfo->script_size = size;
+
+    // Read the script
+    FILE_GOTO(info, pinfo->binary, begin_of_line, 0);
+    FILE_READ(info, pinfo->binary, buf, end_of_line - begin_of_line, 0);
+    buf[end_of_line - begin_of_line] = '\0';
+
+    // Match the tag
+    FILE_GOTO(info, pinfo->binary, begin_of_line, 0);
+    search_script_backward(info);
+    if (info->last_error) goto error;
+
+    // Use detected script size or set until the end
+    if (pinfo->script_size <= 0)
+      pinfo->script_size = file_size - begin_of_script;
+
+    info->last_error = BINJECT_OK;
+  }
+ 
+  // all is right 
+  info->mecha = BINJECT_TAIL_TAG;
+  verbprint(8, "Tail Tag - Set current mode\n");
+  
+  return;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_NO_SCRIPT;
+  pinfo->script_size = 0;
+  pinfo->script_offset = 0;
+  PRINT_MESSAGE(info, "[%d] Invalid Tail Tag\n", info->last_error);
+  return;
+}
+
+size_t binject_tail_tag_read(binject_info_t* info, char * buffer, size_t maximum) {
+  private_info_t * pinfo = private_info(info);
+  verbprint(8, "Tail Tag - Reading a chunk\n");
+
+  // TODO : test multstep data read !!!!
+  // TODO : test attempt to read more data !!!!
+
+  if (!buffer || maximum<=0) {
+    if (pinfo->script_size <= 0) {
+      info->last_error = -__LINE__;
+      goto error;
+    }
+    return pinfo->script_size;
+  }
+
+  int size = pinfo->script_size;
+  int position = pinfo->script_offset;
+  if (size <= 0 || position <= 0) {
+    info->last_error = -__LINE__;
+    goto error;
+  }
+
+  // Go to the script offset
+  if (pinfo->aux_counter < position)
+    pinfo->aux_counter = position;
+  FILE_GOTO(info, pinfo->binary, pinfo->aux_counter, 0);
+
+  // Load the script
+  if (maximum < size) maximum = size;
+  FILE_READ(info, pinfo->binary, buffer, maximum, 0);
+
+  pinfo->aux_counter += size;
+
+  return maximum;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_READ;
+  PRINT_MESSAGE(info, "[%d] Can not read the script\n", info->last_error);
+  return 0;
+}
+
+// ---------------------------------------------------------------------------------
+// -- Append Mechanism - Write
+
+static void binject_inject_tail_tag_start(binject_info_t * info, char * scr_path, char * out_path){
+  private_info_t * pinfo = private_info(info);
+  FILE* out = pinfo->out;
+  const int tag_size = sizeof(BINJECT_TAIL_TAG_EDGE) - 1;
+  verbprint(8, "Tail Tag - First write: appending %d byte tag\n", tag_size);
+
+  // TODO : remove out_path argument ???
+  // TODO : CLOSE out FILE ON ERROR !!?
+
+  FILE_GOTO_END(info, out, 0);
+
+  // Repeat two time to avoid false match in the .data section
+  FILE_WRITE(info, out, BINJECT_TAIL_TAG_EDGE, tag_size, out_path);
+  FILE_WRITE(info, out, BINJECT_TAIL_TAG_EDGE, tag_size, out_path);
+
+  pinfo->aux_counter = 0;
+  info->last_error = BINJECT_OK;
+  
+  return;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR;
+  PRINT_MESSAGE(info, "[%d] Can not start the injection\n", info->last_error);
+  return;
+}
+
+static size_t binject_inject_tail_tag_write(binject_info_t * info, const char * buffer, size_t size) {
+  private_info_t * pinfo = private_info(info);
+  verbprint(8, "Tail Tag - Write a %d byte chunk\n", size);
+
+  // TODO : test multstep data injection !!!!
+  // TODO : test attempt to write more data !!!!
+
+  if (!buffer || size<=0) goto error;
+
+  FILE * out = pinfo->out;
+  char * out_path = pinfo->path;
+
+  FILE_WRITE(info, out, buffer, size, out_path);
+
+  return size;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_WRITE;
+  PRINT_MESSAGE(info, "[%d] Can not inject script chunk\n", info->last_error);
+  return 0;
+}
+
+static void binject_inject_tail_tag_close(binject_info_t * info, char * scr_path, char * out_path){
+  private_info_t * pinfo = private_info(info);
+  verbprint(8, "Tail Tag - Finalizing a %d byte script\n", pinfo->aux_counter);
+
+  // TODO : test multstep data injection !!!!
+  // TODO : test attempt to write more data !!!!
+
+  // TODO : CLOSE out FILE ON ERROR !!!  
+
+  // Store the script offset
+  FILE * out = pinfo->out;
+  FILE_GOTO_END(info, pinfo->binary, 0);
+  int binary_size = 0;
+  FILE_TELL(info, pinfo->binary, &binary_size, 0);
+  FILE_GOTO(info, pinfo->binary, 0, 0);
+  int script_end;
+  FILE_TELL(info, out, &script_end, out_path); 
+  const int tag_size = sizeof(BINJECT_TAIL_TAG_EDGE) - 1;
+  FILE_PRINT(info, out, out_path, SCRIPT_OFFSET_LINE, binary_size + 2 * tag_size);
+
+  info->last_error = BINJECT_OK;
+
+  return;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR;
+  PRINT_MESSAGE(info, "[%d] Can not finalize the injection\n", info->last_error);
+  return;
+}
+
+// ---------------------------------------------------------------------------------
+// -- Array Mechanism - Read
+
+struct {
+  char size[BINJECT_ARRAY_SIZE_FORMAT_LENGTH];
+  char edge[2*sizeof(BINJECT_ARRAY_EDGE)-2];
+  char empty[BINJECT_ARRAY_SIZE];
+} script_array = {
+  .size = "0",
+  .edge = BINJECT_ARRAY_EDGE BINJECT_ARRAY_EDGE,
+};
+
+static void binject_find_array(binject_info_t * info) {
+  private_info_t * pinfo = private_info(info);
+  verbprint(8, "Internal Array - searching for array boundary\n");
+
+  // A size string starting with '\0' always means
+  // no script in the array!
+  if (script_array.size[0] == 0) goto error;
+
+  unsigned int size;
+  if (1 != sscanf(script_array.size, BINJECT_ARRAY_SIZE_FORMAT, &size)){
+    info->last_error = -__LINE__;
+    goto error;
+  }
+
+  // Zero size means no script
+  if (size == 0) {
+    goto error;
+    info->last_error = -__LINE__;
+  }
+
+  info->mecha = BINJECT_INTERNAL_ARRAY;
+  verbprint(8, "Internal Array - Set current mode\n");
+  pinfo->script_size = size;
+  info->last_error = BINJECT_OK;
+
+  return;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_NO_SCRIPT;
+  PRINT_MESSAGE(info, "[%d] Can not find the script\n", info->last_error);
+  return;
+}
+
+size_t binject_array_read(binject_info_t* info, char * buffer, size_t maximum) {
+  private_info_t * pinfo = private_info(info);
+  verbprint(8, "Internal Array - Reading a chunk\n");
+
+  // TODO : TEST multistep read
+  // TODO : TEST read more data
+
+  size_t toread = sizeof(script_array.empty) - pinfo->aux_counter;
+  if (toread <= 0) {
+    info->last_error = BINJECT_ERROR;
+    return 0;
+  }
+  if (toread > pinfo->script_size) toread = pinfo->script_size;
+  if (!buffer || maximum <= 0) return toread;
+  if (maximum < toread) toread = maximum;
+  memcpy(buffer, script_array.empty, toread);
+  pinfo->aux_counter += toread;
+
+  return toread;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_READ;
+  PRINT_MESSAGE(info, "[%d] Can not read the script\n", info->last_error);
+  return 0;
+}
+
+// ---------------------------------------------------------------------------------
+// -- Array Mechanism - Write
+
+static int binject_search_double_tag_forward(binject_info_t * info, const char *tag, int tag_size){
+
+  private_info_t * pinfo = private_info(info);
+  int match = 0;
+  int deb = -1;
+  while (1) {
+
+    // Get next char
+    char c;
+    FILE_READ(info, pinfo->binary, &c, 1, 0);
+
+    // Select the first or second tag repetition character
+    char m;
+    if (match > tag_size-1) m = tag[match - tag_size];
+    else m = tag[match];
+
+    // If a match fails, it retry with the last char of the tag
+    if (m != c) match = 0;
+
+    // Match next char as needed
+    if (m == c) match += 1;
+
+    // Done !
+    if (match > 2*tag_size-1)
+      break;
+
+  }
+
+  return 0;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_NO_SCRIPT;
+  PRINT_MESSAGE(info, "[%d] Can not find the script\n", info->last_error);
+  return info->last_error;
+}
+
+static void binject_inject_array_start(binject_info_t * info, char * scr_path, char * out_path) {
+  private_info_t * pinfo = private_info(info);
+  verbprint(8, "Internal Array - Check array boundary\n");
+
+  FILE_GOTO(info, pinfo->binary, 0, 0);
+
+  // Script Start tag
+  if (binject_search_double_tag_forward(info, BINJECT_ARRAY_EDGE, sizeof(BINJECT_ARRAY_EDGE)-1))
+    goto error;
+  FILE_TELL(info, pinfo->binary, &(pinfo->script_offset), 0);
+
+  if (pinfo->script_offset < 0) goto error;
+
+  pinfo->aux_counter = 0;
+  info->mecha = BINJECT_INTERNAL_ARRAY;
+  verbprint(8, "Internal Array - Set current mode\n");
+
+  return;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_READ;
+  info->mecha = BINJECT_TAIL_TAG;
+  pinfo->script_size = 0;
+  pinfo->script_offset = 0;
+  PRINT_MESSAGE(info, "[%d] Can not start injection\n", info->last_error);
+  return;
+}
+
+static size_t binject_inject_array_write(binject_info_t * info, const char * buffer, size_t size) {
+  private_info_t * pinfo = private_info(info);
+  verbprint(8, "Internal Array - Write a %d byte chunk\n", size);
+
+  // TODO : test multstep data injection !!!!
+  // TODO : test attempt to write more data !!!!
+
+  //info->mecha = BINJECT_TAIL_TAG;
+  // verbprint(8, "Tail Tag - Set current mode\n");
+
+  if (pinfo->aux_counter + size < sizeof(script_array.empty)) { // maximum script size
+    memcpy(script_array.empty + pinfo->aux_counter, buffer, size);
+    pinfo->aux_counter += size;
+
+  } else {
+    // Switch to file append mode
+    info->mecha = BINJECT_TAIL_TAG;
+    verbprint(8, "Internal Array - Switching to Tail Tag mode\n");
+    int aux = pinfo->aux_counter;
+    binject_inject_tail_tag_start(info, "script", "output");
+    binject_inject_tail_tag_write(info, script_array.empty, aux);
+  }
+
+  return size;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_WRITE;
+  PRINT_MESSAGE(info, "[%d] Can not write script chunk\n", info->last_error);
+  return 0;
+}
+
+static void binject_inject_array_close(binject_info_t * info, char * scr_path, char * out_path) {
+  private_info_t * pinfo = private_info(info);
+  int max = pinfo->script_offset - (script_array.empty - script_array.size);
+  verbprint(8, "Internal Array - Finalizing a %d byte script at 0x%x\n", pinfo->aux_counter, max);
+
+  // TODO : test multstep data injection !!!!
+  // TODO : test attempt to write more data !!!!
+
+  FILE_GOTO(info, pinfo->out, max, 0);
+  FILE_PRINT(info, pinfo->out, out_path, BINJECT_ARRAY_SIZE_FORMAT, pinfo->aux_counter);
+  FILE_GOTO(info, pinfo->out, pinfo->script_offset, 0);
+  FILE_WRITE(info, pinfo->out, script_array.empty, sizeof(script_array.empty), out_path);
+
+  return;
+error:
+  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_WRITE;
+  PRINT_MESSAGE(info, "[%d] can not finalize injection\n", info->last_error);
+  return;
+}
+
+// --------------------------------------------------------------------------------
+// -- Mechanism Dispatch / API Functions
+
+void binject_find(binject_info_t * info){
+  binject_mechanism_t * m = &( info->mecha );
+
+  if (BINJECT_INTERNAL_ARRAY == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+    binject_find_array(info);
+
+  if (BINJECT_TAIL_TAG == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+    binject_find_tail_tag(info);
+
+  if (info->last_error != BINJECT_OK){
+    info->last_error = -__LINE__;
+    PRINT_MESSAGE(info, "[%d] Can not find the script\n", info->last_error);
+  }
+  return;
+}
+
+size_t binject_read(binject_info_t* info, char * buffer, size_t maximum) {
+  binject_mechanism_t * m = &( info->mecha );
+  size_t result;
+  switch (*m) {
+
+    break; case BINJECT_INTERNAL_ARRAY: 
+      result = binject_array_read(info, buffer, maximum);
+      if (info->last_error != BINJECT_OK) goto error;
+
+    break; case BINJECT_TAIL_TAG:
+      result = binject_tail_tag_read(info, buffer, maximum);
+      if (info->last_error != BINJECT_OK) goto error;
+
+    break; default: goto error;
+  }
+
+  return result;
+error:
+  if (info->last_error != BINJECT_OK)
+    PRINT_MESSAGE(info, "[%d] Can not read the chunk\n", info->last_error);
+  return 0;
+}
+
+void binject_inject_start(binject_info_t * info, char * scr_path, char * out_path){
+  private_info_t * pinfo = private_info(info);
+  binject_mechanism_t * m = &( info->mecha );
+
+  // Open the output file
+  if (!pinfo->out)
+    FILE_OPEN(info, out_path, "wb", &(pinfo->out));
+  if (!binject_copy_binary(info, out_path)){
+    // TODO : WRAP IN MACRO ???
+    info->last_error = -__LINE__;
+    // TODO : something else to do ??
+    goto error;
+  }
+  FILE_GOTO_END(info, pinfo->out, 0);
+
+  if (BINJECT_INTERNAL_ARRAY == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+    binject_inject_array_start(info, scr_path, out_path);
+
+  if (BINJECT_TAIL_TAG == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+    binject_inject_tail_tag_start(info, scr_path, out_path);
+
+error:
+  if (info->last_error != BINJECT_OK)
+    PRINT_MESSAGE(info, "[%d] Can not start injection\n", info->last_error);
+  return;
+}
+
+size_t binject_write(binject_info_t * info, const char * buffer, size_t size) {
+  binject_mechanism_t * m = &( info->mecha );
+  size_t result = 0;
+
+  if (BINJECT_INTERNAL_ARRAY == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+    result = binject_inject_array_write(info, buffer, size);
+
+  if (BINJECT_TAIL_TAG == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+    result = binject_inject_tail_tag_write(info, buffer, size);
+
+  if (info->last_error != BINJECT_OK)
+    PRINT_MESSAGE(info, "[%d] Can not write the chunk\n", info->last_error);
+  return result;
+}
+
+void binject_inject_close(binject_info_t * info, char * scr_path, char * out_path){
+  binject_mechanism_t * m = &( info->mecha );
+  private_info_t * pinfo = private_info(info);
+
+  if (BINJECT_INTERNAL_ARRAY == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+    binject_inject_array_close(info, scr_path, out_path);
+
+  if (BINJECT_TAIL_TAG == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+    binject_inject_tail_tag_close(info, scr_path, out_path);
+
+  if (pinfo->out) {
+    fclose(pinfo->out);
+    pinfo->out = 0;
+  }
+
+  if (info->last_error != BINJECT_OK)
+    PRINT_MESSAGE(info, "[%d] Can not finalize the injection\n", info->last_error);
+  return;
+}
+
+// --------------------------------------------------------------------------------
+// -- Example main app: the BINJECT_SCRIPT_HANDLER will be called.
+// -- If the handler is not defined, the script will be simply printed to stdout
+// -- NOTE - This should use only the stuff exposed into the header file since
+// -- it must serve also as an example of library usage.
+
+#if 0 || BINJECT_MAIN_APP
+
+static int print_help(const char * command){
+  printf("\nUsage:\n  %s script.txt\n\n", command);
+  printf("script.txt.exe executable will be generated or overwritten.\n");
+#ifdef DEFAULT_HANDLER 
+  printf("script.txt.exe will print to the stdout an embedded copy of script.txt.\n\n");
+#else
+  printf("script.txt.exe will launch an embedded copy of script.txt.\n\n");
+#endif
+  printf("NOTE: depending on the chosen embedding mechanism, some help information will be\n");
+  printf("appended at end of script.txt.exe. For example, if the TAIL TAG mechanism was selected\n");
+  printf("You will found the following lines (that will help you to edit the file manually):\n");
+  printf(SCRIPT_OFFSET_LINE, 0x123);
+  printf("\n");
+  return 0;
+}
+
+void binject_main_app_internal_script_inject(binject_info_t * info, int argc, char **argv){
+
+  if (argc < 2) goto error;
+  char * scr_path = argv[1];
+
+  // Open the scipt
+  FILE * scr = fopen(scr_path, "rb");
+  if (!scr) goto error;
+
+  if (fseek(scr, 0, SEEK_END)) goto error;
+  int siz = ftell(scr);
+  if (siz < 0) goto error;
+  if (fseek(scr, 0, SEEK_SET)) goto error;
+
+  int bufsize = siz;
+  { // Scope block to avoid goto and variable length issue
+    char buf[bufsize];
+
+    // Read the script
+    fread(buf, 1, siz, scr);
+    fclose(scr);
+
+    // Copy the script
+    binject_write(info, buf, siz);
+
+    info->last_error = BINJECT_OK;
+  }
+
+  return;
+error:
+  info->last_error = BINJECT_ERROR;
+  snprintf(info->last_message, sizeof(info->last_message)-1,
+    "error reading the script %s\n", scr_path);
+  return;
+}
+
+static int binject_main_app_internal_script_handle(binject_info_t * info, int argc, char **argv) {
+
+  size_t script_size = binject_read(info, 0,0);
+  if (script_size < 0)
+    return -1;
+  char script[script_size];
+  size_t status = binject_read(info, script, script_size);
+  if (binject_error(status) || script_size != status)
+    return -1; // TODO : proper error handle
+
+  printf("A %d byte script was found (dump:)[", script_size);
+  fwrite(script, 1, script_size, stdout);
+  printf("]\n");
+  return 0;
+}
+
+int main(int argc, char **argv) {
+  int result = 0;
+
+  // Open the binary
+  binject_info_t info = BINJECT_INIT;
+  binject_binary_path(&info, argv[0]);
+  if (info.last_error) {
+    printf("%s", info.last_message);
+    return -1;
+  }
+
+  binject_find(&info);
+
+  // Run the proper tool
+  if (info.last_error == BINJECT_OK) {
+    result = BINJECT_SCRIPT_HANDLER(&info, argc, argv);
+
+  } else if (argc < 2 || argv[1][0] == '\0') {
+    print_help(argv[0]);
+    info.last_error = BINJECT_OK;
+
+  } else {
+
+    // TODO : handle command line arguments !!!
+
+    // Calculate the output path 
+    const int pathlen = strlen(argv[1]);
+    char OUTPUT_FILE[pathlen+10];
+    strncpy(OUTPUT_FILE, argv[1], pathlen);
+    strncpy(OUTPUT_FILE + pathlen, ".exe", 4);
+    OUTPUT_FILE[pathlen+4] = '\0';
+    verbprint(8, "General - using %s as output file\n", OUTPUT_FILE);
+
+    // Inject !
+    binject_inject_start(&info, argv[1], OUTPUT_FILE);
+    BINJECT_SCRIPT_INJECT(&info, argc, argv); // TODO : HANDLE ERROR ?!!
+    binject_inject_close(&info, argv[1], OUTPUT_FILE);
+  }
+
+  if (info.last_error != BINJECT_OK) {
+    fprintf(stderr, "Error %s\n", info.last_message);
+    return info.last_error;
+  } else if (result) {
+    fprintf(stderr, "Error [%d] generic\n", -__LINE__);
+  }
+  return result;
+}
+
+#endif // BINJECT_MAIN_APP
+
