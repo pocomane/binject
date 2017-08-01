@@ -35,8 +35,7 @@ script pass it as argument.
 ./binject.exe my_script
 ```
 
-This will generate the file my_script.exe. If the "Echo" example was compiled,
-the following lines:
+This will generate the file my_script.exe. Then:
 
 ```
 echo "hello world" > my_text.txt
@@ -46,6 +45,10 @@ rm my_text.txt
 ```
 
 will print "hello world" to the screen.
+
+In the test directory there is a test that will execute all the commands seen
+before. At end it will also check that the output of the example app is the
+expected one.
 
 How it works
 -------------
@@ -67,14 +70,10 @@ For more details for both the methods, look at the Options section.
 Options
 --------
 
-You can look at the top of the binject.c for a full list of compile-time
-options. For example you can set the parsing function or you can disable the
-internal main function, and use binject as a library. A summary of the most
-important ones follows.
-
-`BINJECT_MAIN_APP` - If this is true, the internal main function will be used.
-Otherwise you can write you own main and use binject as a library. The default
-is 1.
+You can look at the top of the binject.h and binject.c for a full list of
+compile-time options. For example you can set the parsing function or you can
+disable the internal main function, and use binject as a library. A summary of
+the most important ones follows.
 
 `BINJECT_SCRIPT_HANDLER` - If the main function is enabled, this callback will
 be called to execute the script. It must be a function with the following

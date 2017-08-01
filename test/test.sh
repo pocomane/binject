@@ -1,10 +1,12 @@
 #!/bin/sh
 
-rm -fR ./tmp
-mkdir -p ./tmp
-cd ./tmp
+TEST_DIR="$(readlink -f "$(dirname "$0")")/tmp"
 
-gcc -std=c99 -o binject.exe ../*.c
+rm -fR "$TEST_DIR"
+mkdir "$TEST_DIR"
+cd "$TEST_DIR"
+
+gcc -std=c99 -o binject.exe ../../*.c
 ./binject.exe my_script
 
 echo "hello world" > my_text.txt

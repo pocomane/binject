@@ -10,11 +10,6 @@
 // ---------------------------------------------------------------------------------
 // -- Manual config - Defaults can be overwritten in an external header
 
-// Enable the main function in this source.
-#ifndef BINJECT_MAIN_APP
-#define BINJECT_MAIN_APP 1
-#endif // BINJECT_MAIN_APP
-
 // Comment line delimiters for tail tag
 #if !defined(BINJECT_COMMENT_START) || !defined(COMMEND_END)
 #define BINJECT_COMMENT_START "-- "
@@ -27,12 +22,6 @@
 #define BINJECT_TAIL_STRING "IF THIS IS THE LAST NON-EMPTY LINE, THE SCRIPT WILL BE SEARCHED AT 0x%x." 
 #endif // BINJECT_TAIL_STRING
 
-// Size of the data for the INTERNAL ARRAY mechanism. It should be
-// a positive integer
-#ifndef BINJECT_ARRAY_SIZE
-#define BINJECT_ARRAY_SIZE (9216)
-#endif // BINJECT_ARRAY_SIZE
-
 // If the INTERNAL ARRAY mechanism was chosen, the script size will be kept
 // in the following (scanf) format. Note: A size string starting with
 // '\0' means no script in the array!
@@ -41,43 +30,11 @@
 #define BINJECT_ARRAY_SIZE_FORMAT "%u"
 #endif // BINJECT_ARRAY_SIZE_FORMAT
 
-// If the INTERNAL ARRAY mechanism was chosen, the script will be kept in
-// in a string with the following length (should be
-// compatible with BINJECT_ARRAY_SIZE_FORMAT)
-#ifndef BINJECT_ARRAY_SIZE_FORMAT_LENGTH
-#define BINJECT_ARRAY_SIZE_FORMAT_LENGTH 32
-#endif // BINJECT_ARRAY_SIZE_FORMAT_LENGTH
-
-// If the INTERNAL ARRAY mechanism was chosen, this will be placed between the
-// binary and the script. It will be checked durinng the execution to detect the
-// start of the script.
-#ifndef BINJECT_ARRAY_EDGE
-#define BINJECT_ARRAY_EDGE "\nTHE\0ARRAY\0SCRIPT\0STARTS\0JUST\0AFTER\0THESE\0TWO\0IDENTICAL\0TAGS\n"
-#endif // BINJECT_ARRAY_EDGE
-
 // If the "Append" mechanism was chosen, this will be placed between the binary
 // and the script. It will be checked to detect the start of the script.
 #ifndef BINJECT_TAIL_TAG_EDGE
 #define BINJECT_TAIL_TAG_EDGE "\0THE\0TAIL\0SCRIPT\0IS\0JUST\0AFTER\0THESE\0TWO\0IDENTICAL\0TAGS\n"
 #endif // BINJECT_TAIL_TAG_EDGE
-
-// If the main function is enabled, this callback will be called to handle
-// the script. It must be a function with the following prototype:
-//   int my_run_callback(binject_info_t * info, int argc, char **argv)
-// If not defined an internal one will be used: it will just print the script
-// to the stdout
-#ifndef BINJECT_SCRIPT_HANDLER
-#define BINJECT_SCRIPT_HANDLER binject_main_app_internal_script_handle
-#define DEFAULT_HANDLER // Do not modify this in an external header !
-#endif // BINJECT_SCRIPT_HANDLER
-
-// If the main function is enabled, this callback will be called to inject
-// the script. It must be a function with the following prototype:
-//   void my_inj_callback(binject_info_t * info, char * scr_path, char * out_path)
-// If not defined an internal one will be used to just copy the file at argv[1]
-#ifndef BINJECT_SCRIPT_INJECT
-#define BINJECT_SCRIPT_INJECT binject_main_app_internal_script_inject
-#endif // BINJECT_SCRIPT_INJECT
 
 // ---------------------------------------------------------------------------------
 // -- Automatic definition - Do not modify in an external header
@@ -530,15 +487,6 @@ error:
 // ---------------------------------------------------------------------------------
 // -- Array Mechanism - Read
 
-struct {
-  char size[BINJECT_ARRAY_SIZE_FORMAT_LENGTH];
-  char edge[2*sizeof(BINJECT_ARRAY_EDGE)-2];
-  char empty[BINJECT_ARRAY_SIZE];
-} script_array = {
-  .size = "0",
-  .edge = BINJECT_ARRAY_EDGE BINJECT_ARRAY_EDGE,
-};
-
 static void binject_find_array(binject_info_t * info) {
   private_info_t * pinfo = private_info(info);
   verbprint(8, "Internal Array - searching for array boundary\n");
@@ -754,6 +702,7 @@ error:
 }
 
 void binject_inject_start(binject_info_t * info, char * scr_path, char * out_path){
+  verbprint(8, "General - using %s as output file\n", out_path);
   private_info_t * pinfo = private_info(info);
   binject_mechanism_t * m = &( info->mecha );
 
@@ -814,130 +763,4 @@ void binject_inject_close(binject_info_t * info, char * scr_path, char * out_pat
     PRINT_MESSAGE(info, "[%d] Can not finalize the injection\n", info->last_error);
   return;
 }
-
-// --------------------------------------------------------------------------------
-// -- Example main app: the BINJECT_SCRIPT_HANDLER will be called.
-// -- If the handler is not defined, the script will be simply printed to stdout
-// -- NOTE - This should use only the stuff exposed into the header file since
-// -- it must serve also as an example of library usage.
-
-#if 0 || BINJECT_MAIN_APP
-
-static int print_help(const char * command){
-  printf("\nUsage:\n  %s script.txt\n\n", command);
-  printf("script.txt.exe executable will be generated or overwritten.\n");
-#ifdef DEFAULT_HANDLER 
-  printf("script.txt.exe will print to the stdout an embedded copy of script.txt.\n\n");
-#else
-  printf("script.txt.exe will launch an embedded copy of script.txt.\n\n");
-#endif
-  printf("NOTE: depending on the chosen embedding mechanism, some help information will be\n");
-  printf("appended at end of script.txt.exe. For example, if the TAIL TAG mechanism was selected\n");
-  printf("You will found the following lines (that will help you to edit the file manually):\n");
-  printf(SCRIPT_OFFSET_LINE, 0x123);
-  printf("\n");
-  return 0;
-}
-
-void binject_main_app_internal_script_inject(binject_info_t * info, int argc, char **argv){
-
-  if (argc < 2) goto error;
-  char * scr_path = argv[1];
-
-  // Open the scipt
-  FILE * scr = fopen(scr_path, "rb");
-  if (!scr) goto error;
-
-  if (fseek(scr, 0, SEEK_END)) goto error;
-  int siz = ftell(scr);
-  if (siz < 0) goto error;
-  if (fseek(scr, 0, SEEK_SET)) goto error;
-
-  int bufsize = siz;
-  { // Scope block to avoid goto and variable length issue
-    char buf[bufsize];
-
-    // Read the script
-    fread(buf, 1, siz, scr);
-    fclose(scr);
-
-    // Copy the script
-    binject_write(info, buf, siz);
-
-    info->last_error = BINJECT_OK;
-  }
-
-  return;
-error:
-  info->last_error = BINJECT_ERROR;
-  snprintf(info->last_message, sizeof(info->last_message)-1,
-    "error reading the script %s\n", scr_path);
-  return;
-}
-
-static int binject_main_app_internal_script_handle(binject_info_t * info, int argc, char **argv) {
-
-  size_t script_size = binject_read(info, 0,0);
-  if (script_size < 0)
-    return -1;
-  char script[script_size];
-  size_t status = binject_read(info, script, script_size);
-  if (binject_error(status) || script_size != status)
-    return -1; // TODO : proper error handle
-
-  printf("A %d byte script was found (dump:)[", script_size);
-  fwrite(script, 1, script_size, stdout);
-  printf("]\n");
-  return 0;
-}
-
-int main(int argc, char **argv) {
-  int result = 0;
-
-  // Open the binary
-  binject_info_t info = BINJECT_INIT;
-  binject_binary_path(&info, argv[0]);
-  if (info.last_error) {
-    printf("%s", info.last_message);
-    return -1;
-  }
-
-  binject_find(&info);
-
-  // Run the proper tool
-  if (info.last_error == BINJECT_OK) {
-    result = BINJECT_SCRIPT_HANDLER(&info, argc, argv);
-
-  } else if (argc < 2 || argv[1][0] == '\0') {
-    print_help(argv[0]);
-    info.last_error = BINJECT_OK;
-
-  } else {
-
-    // TODO : handle command line arguments !!!
-
-    // Calculate the output path 
-    const int pathlen = strlen(argv[1]);
-    char OUTPUT_FILE[pathlen+10];
-    strncpy(OUTPUT_FILE, argv[1], pathlen);
-    strncpy(OUTPUT_FILE + pathlen, ".exe", 4);
-    OUTPUT_FILE[pathlen+4] = '\0';
-    verbprint(8, "General - using %s as output file\n", OUTPUT_FILE);
-
-    // Inject !
-    binject_inject_start(&info, argv[1], OUTPUT_FILE);
-    BINJECT_SCRIPT_INJECT(&info, argc, argv); // TODO : HANDLE ERROR ?!!
-    binject_inject_close(&info, argv[1], OUTPUT_FILE);
-  }
-
-  if (info.last_error != BINJECT_OK) {
-    fprintf(stderr, "Error %s\n", info.last_message);
-    return info.last_error;
-  } else if (result) {
-    fprintf(stderr, "Error [%d] generic\n", -__LINE__);
-  }
-  return result;
-}
-
-#endif // BINJECT_MAIN_APP
 

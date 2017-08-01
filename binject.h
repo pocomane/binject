@@ -5,9 +5,6 @@
 // -------------------------------------------------------------------------------
 // -- Manual configuration - set preferences here -- more info in the source file
 
-// Enable the main function in the binject source
-#define BINJECT_MAIN_APP 1
-
 // If the main function is enabled, this callback will be called to handle
 // the script. It must be a function with the following prototype:
 //   int my_run_callback(binject_info_t * info, int argc, char **argv)
@@ -20,6 +17,27 @@
 //   int my_inj_callback(binject_info_t * info, int argc, char **argv)
 // If not defined an internal one will be used to just copy the file at argv[1]
 //#define BINJECT_SCRIPT_INJECT my_inj_callback
+
+// If the INTERNAL ARRAY mechanism was chosen, the script will be kept in
+// in a string with the following length. It should be
+// compatible with BINJECT_ARRAY_SIZE_FORMAT (see the source file)
+#ifndef BINJECT_ARRAY_SIZE_FORMAT_LENGTH
+#define BINJECT_ARRAY_SIZE_FORMAT_LENGTH 32
+#endif // BINJECT_ARRAY_SIZE_FORMAT_LENGTH
+
+// If the INTERNAL ARRAY mechanism was chosen, this will be placed between the
+// binary and the script. It will be checked durinng the execution to detect the
+// start of the script.
+#ifndef BINJECT_ARRAY_EDGE
+#define BINJECT_ARRAY_EDGE "\nTHE\0ARRAY\0SCRIPT\0STARTS\0JUST\0AFTER\0THESE\0TWO\0IDENTICAL\0TAGS\n"
+#endif // BINJECT_ARRAY_EDGE
+
+// Size of the data for the INTERNAL ARRAY mechanism. It should be
+// a positive integer
+#ifndef BINJECT_ARRAY_SIZE
+// #define BINJECT_ARRAY_SIZE (9216)
+#define BINJECT_ARRAY_SIZE (0)
+#endif // BINJECT_ARRAY_SIZE
 
 // -------------------------------------------------------------------------------
 // -- Export library function
@@ -85,6 +103,20 @@ size_t binject_read(binject_info_t* info, char * buffer, size_t maximum);
 
 // Set the verbosity level. >9 are for debug.
 void binject_set_verbosity(int d);
+
+typedef struct {
+  char size[BINJECT_ARRAY_SIZE_FORMAT_LENGTH];
+  char edge[2*sizeof(BINJECT_ARRAY_EDGE)-2];
+  char empty[BINJECT_ARRAY_SIZE];
+} script_array_t;
+
+extern script_array_t script_array;
+
+#define BINJECT_STATIC_DATA() \
+script_array_t script_array = { \
+  .size = "0", \
+  .edge = BINJECT_ARRAY_EDGE BINJECT_ARRAY_EDGE, \
+}
 
 #endif // BINJECT_H
 
