@@ -53,12 +53,14 @@
 // levels > 9 are for debug.
 // default = 0 = do not print nothing about the "Normal" operation
 
-static int current_verbosity_level = 10;
-static int verbosity_level(int d) { return current_verbosity_level > d; }
+#ifndef VERB_LEVEL
+#define VERB_LEVEL 0
+#endif
 
 #define verbprint(D, ...) do{ \
-  if (verbosity_level(D)) { \
-    if (verbosity_level(9)) printf("DEBUG at %d: ", __LINE__); \
+  if (VERB_LEVEL > D) { \
+    if (VERB_LEVEL > 9) \
+      printf("DEBUG at %d: ", __LINE__); \
     printf(__VA_ARGS__); \
   } \
 }while(0)
@@ -202,10 +204,6 @@ void binject_binary_path(binject_info_t * info, char * path) {
   pinfo->script_size = 0;
   info->last_error = BINJECT_OK;
   info->last_message[0] = '\0';
-}
-
-void binject_set_verbosity(int d){
-  current_verbosity_level = d;
 }
 
 // ---------------------------------------------------------------------------------

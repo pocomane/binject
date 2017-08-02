@@ -93,5 +93,9 @@ should be a positive integer. The default is 9216 byte.
 flags are used to format the last line as a script comment line. The default is
 a lua style comment.
 
+`VERB_LEVEL` - Write some information during the esecution. If it is > 9 also
+some debug information is printed at every line (mainly position in the
+sources). The default is 0, which means that nothing will be printed.
+
 TODO : Describe how to force a specific mechanism
 
