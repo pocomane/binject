@@ -35,8 +35,7 @@
 // Size of the data for the INTERNAL ARRAY mechanism. It should be
 // a positive integer
 #ifndef BINJECT_ARRAY_SIZE
-// #define BINJECT_ARRAY_SIZE (9216)
-#define BINJECT_ARRAY_SIZE (0)
+#define BINJECT_ARRAY_SIZE (9216)
 #endif // BINJECT_ARRAY_SIZE
 
 // -------------------------------------------------------------------------------
