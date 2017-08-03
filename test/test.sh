@@ -4,6 +4,7 @@
 # Prepare directory
 
 TEST_DIR="$(readlink -f "$(dirname "$0")")/tmp"
+CC="gcc -std=c99 "
 
 rm -fR "$TEST_DIR"
 mkdir "$TEST_DIR"
@@ -12,10 +13,10 @@ cd "$TEST_DIR"
 #############################################################
 # Compile static
 
-gcc -o ./array_static.exe ../../*.c
+$CC -o ./array_static.exe ../../*.c
 strip ./array_static.exe
 
-gcc -D'BINJECT_ARRAY_SIZE=3' -o ./tail_static.exe ../../*.c
+$CC -D'BINJECT_ARRAY_SIZE=3' -o ./tail_static.exe ../../*.c
 strip ./tail_static.exe
 
 cp ./tail_static.exe ./tail_static_bis.exe
@@ -23,8 +24,8 @@ cp ./tail_static.exe ./tail_static_bis.exe
 #############################################################
 # Compile shared
 
-gcc -shared -fPIC -std=c99 -o ./libbinject_array.so ../../binject.c || exit -1
-gcc -o ./array_shared.exe ../../example.c -L ./ -lbinject_array || exit -1
+$CC -shared -fPIC -o ./libbinject_array.so ../../binject.c || exit -1
+$CC -o ./array_shared.exe ../../example.c -L ./ -lbinject_array || exit -1
 strip ./libbinject_array.so
 strip ./array_shared.exe
 

@@ -95,11 +95,6 @@ static private_info_t* private_info(binject_info_t * info) {
   I, BINJECT_ERROR_SEEK, "while accessing", N \
 )
 
-#define FILE_GET_CHAR(I, F, B, S, N) ERRWRAP( \
-  fgetc(F) != EOF, \
-  I, BINJECT_ERROR_READ, "while reading", N \
-)
-
 #define FILE_READ(I, F, B, S, N) ERRWRAP( \
   fread(B, 1, S, F) != (S), \
   I, BINJECT_ERROR_READ, "while reading", N \
@@ -114,23 +109,6 @@ static private_info_t* private_info(binject_info_t * info) {
   fprintf(F, __VA_ARGS__) <0, \
   I, BINJECT_ERROR_WRITE, "while writing", N \
 )
-
-static int is_ascii_text(char c){
-  if (c < ' ' && c != '\r' && c != '\n' && c != '\t') return 0;
-  if (c > '~') return 0;
-  return 1;
-}
-
-static int is_ascii_line_break(char c){
-  if (c == '\r' || c == '\n') return 1;
-  return 0;
-}
-
-static int is_ascii_whitespace(char c){
-  if (is_ascii_line_break(c)) return 1;
-  if (c == ' ' || c == '\t') return 1;
-  return 0;
-}
 
 static FILE * binject_copy_binary(binject_info_t * info, char * out_path) {
   private_info_t * pinfo = private_info(info);
@@ -186,70 +164,6 @@ void binject_binary_path(binject_info_t * info, char * path) {
 
 // ---------------------------------------------------------------------------------
 // -- Append Mechanism - Read
-
-static void search_script_backward(binject_info_t * info) {
-  private_info_t * pinfo = private_info(info);
-
-  pinfo->script_offset = 0;
-  info->last_error = BINJECT_ERROR_NO_TAG;
-  const int tagsize = sizeof(BINJECT_TAIL_TAG_EDGE) - 2;
-  int current = 0;
-  FILE_TELL(info, pinfo->binary, &current, 0);
-
-  // This wil try to match the tag two time. So it should avoid
-  // false match due the presence of the string in the the .data section
-  int match = tagsize;
-  current += 1;
-  while (!(match < -tagsize-1)) {
-
-    current -= 1;
-    if (current <= 1) break;
-    FILE_GOTO(info, pinfo->binary, current, 0);
-
-    // Select the first or second tag repetition character
-    char m;
-    if (match < 0) m = BINJECT_TAIL_TAG_EDGE[tagsize + match + 1];
-    else m = BINJECT_TAIL_TAG_EDGE[match];
-
-    char c;
-    FILE_READ(info, pinfo->binary, &c, 1, 0);
-
-    // If a match fails, it retry with the last char of the tag
-    if (m != c) {
-      match = tagsize;
-      if (match < 0) m = BINJECT_TAIL_TAG_EDGE[tagsize + match + 1];
-      else m = BINJECT_TAIL_TAG_EDGE[match];
-    }
-
-    if (m == c) {
-     match -= 1; // Test for the next char in the tag
-    } else {
-      // this stops the loop when it find a char that is not admitted in a
-      // script and that does not match the tag
-      if (!is_ascii_text(c)) break;
-    }
-  }
-
-  if (match < -tagsize-1) {
-    
-    // Tag was found
-    FILE_TELL(info, pinfo->binary, &current, 0);
-    pinfo->script_offset = current + 2 * (sizeof(BINJECT_TAIL_TAG_EDGE) -1) -1;
-    info->last_error = BINJECT_OK;
-
-  } else {
-
-    // No valid tag
-    PRINT_MESSAGE(info, "[%d] Script not found\n", info->last_error);
-    info->last_error = BINJECT_ERROR_NO_SCRIPT;
-  }
-
-  return;
-error:
-  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_NO_SCRIPT;
-  PRINT_MESSAGE(info, "[%d] Can not find the script\n", info->last_error);
-  return;
-}
 
 static void binject_find_tail_tag(binject_info_t * info) {
   private_info_t * pinfo = private_info(info);
