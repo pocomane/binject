@@ -42,10 +42,12 @@ test_working_sequence(){
   echo "$TEXT" > ./"$1".txt || exit -1
 
   # embed the text
+  echo "------> $1"
   ./"$1" ./"$1".txt || exit -1
   mv "$1".txt.exe ./"$1".emb || exit -1
 
   # run the app with the embedded text
+  echo "------> $1.emb"
   ./"$1".emb > ./"$1".rpt || exit -1
 
   # check output
@@ -56,6 +58,8 @@ test_working_sequence(){
     echo "SOMETHING WRONG"
     exit -1
   fi
+
+  echo "------"
 }
 
 test_working_sequence array_static.exe

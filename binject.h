@@ -104,6 +104,7 @@ size_t binject_read(binject_info_t* info, char * buffer, size_t maximum);
 void binject_set_verbosity(int d);
 
 typedef struct {
+  char mechanism[2];
   char size[BINJECT_ARRAY_SIZE_FORMAT_LENGTH];
   char edge[2*sizeof(BINJECT_ARRAY_EDGE)-2];
   char empty[BINJECT_ARRAY_SIZE];
@@ -113,6 +114,7 @@ extern script_array_t script_array;
 
 #define BINJECT_STATIC_DATA() \
 script_array_t script_array = { \
+  .mechanism = "\0", \
   .size = "0", \
   .edge = BINJECT_ARRAY_EDGE BINJECT_ARRAY_EDGE, \
 }

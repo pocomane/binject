@@ -10,18 +10,6 @@
 // ---------------------------------------------------------------------------------
 // -- Manual config - Defaults can be overwritten in an external header
 
-// Comment line delimiters for tail tag
-#if !defined(BINJECT_COMMENT_START) || !defined(COMMEND_END)
-#define BINJECT_COMMENT_START "-- "
-#define BINJECT_COMMENT_END ""
-#endif // BINJECT_COMMENT_*
-
-// Tail tag format. NOTE: TAIL_TAG constand will be passed to a printf like
-// function. It must contain only one format specifier of the "%x" type
-#ifndef BINJECT_TAIL_STRING
-#define BINJECT_TAIL_STRING "IF THIS IS THE LAST NON-EMPTY LINE, THE SCRIPT WILL BE SEARCHED AT 0x%x." 
-#endif // BINJECT_TAIL_STRING
-
 // If the INTERNAL ARRAY mechanism was chosen, the script size will be kept
 // in the following (scanf) format. Note: A size string starting with
 // '\0' means no script in the array!
@@ -35,17 +23,6 @@
 #ifndef BINJECT_TAIL_TAG_EDGE
 #define BINJECT_TAIL_TAG_EDGE "\0THE\0TAIL\0SCRIPT\0IS\0JUST\0AFTER\0THESE\0TWO\0IDENTICAL\0TAGS\n"
 #endif // BINJECT_TAIL_TAG_EDGE
-
-// ---------------------------------------------------------------------------------
-// -- Automatic definition - Do not modify in an external header
-
-// When the append mechanism was chosend, this is placed at end of file.
-// It will be checked to detect where the script is. It should not contain
-// the SCRIPT_OFFSET_SEPARATOR
-#define SCRIPT_OFFSET_FORMAT BINJECT_COMMENT_START BINJECT_TAIL_STRING BINJECT_COMMENT_END
-
-#define SCRIPT_OFFSET_SEPARATOR "\n"
-#define SCRIPT_OFFSET_LINE SCRIPT_OFFSET_SEPARATOR SCRIPT_OFFSET_FORMAT SCRIPT_OFFSET_SEPARATOR
 
 // ---------------------------------------------------------------------------------
 // -- Verbosity selection
@@ -62,6 +39,7 @@
     if (VERB_LEVEL > 9) \
       printf("DEBUG at %d: ", __LINE__); \
     printf(__VA_ARGS__); \
+    fflush(stdout);\
   } \
 }while(0)
 
@@ -277,85 +255,33 @@ static void binject_find_tail_tag(binject_info_t * info) {
   private_info_t * pinfo = private_info(info);
   verbprint(8, "Tail Tag - searching script from the bottom\n");
 
-  pinfo->script_offset = 0;
-  pinfo->script_size = 0;
-  info->last_error = BINJECT_ERROR_NO_SCRIPT;
-
   if (!pinfo->binary)
     FILE_OPEN(info, pinfo->path, "rb", &(pinfo->binary));
 
-  // Get the I, file size
-  FILE_GOTO_END(info, pinfo->binary, 0);
-  int file_size;
-  FILE_TELL(info, pinfo->binary, &file_size, 0);
-
-  // Find the last non-empty line
-  int begin_of_line = file_size;
-  int non_empty_line_found = 0;
-  int end_of_line = -1;
-  while (1) {
-
-    // Move and update position in the file
-    begin_of_line -= 1;
-    if (begin_of_line <= 1) break;
-    FILE_GOTO(info, pinfo->binary, begin_of_line, 0);
-
-    // Match an non-empty line
-    char c;
-    FILE_READ(info, pinfo->binary, &c, 1, 0);
-    if (c == SCRIPT_OFFSET_SEPARATOR[0]) {
-      if (non_empty_line_found) break;
-      end_of_line = begin_of_line;
-    }
-    if (!is_ascii_whitespace(c) && !is_ascii_line_break(c)){
-      non_empty_line_found = 1;
-    }
-  }
-  begin_of_line += 1;
-
-  // Check line
-  if (0
-  || end_of_line <= 1 || begin_of_line <= 1
-  || end_of_line - begin_of_line < sizeof(SCRIPT_OFFSET_LINE)-1
-  || end_of_line - begin_of_line > sizeof(SCRIPT_OFFSET_LINE)+64
-  ) goto error;
-
-  // Load the line
-  { // Scope block to avoid goto and variable length issue
-    char buf[end_of_line - begin_of_line + 1];
-    FILE_GOTO(info, pinfo->binary, begin_of_line, 0);
-    FILE_READ(info, pinfo->binary, buf, end_of_line - begin_of_line, 0);
-    buf[end_of_line - begin_of_line] = '\0';
-
-    // Read the script offset
-    unsigned int begin_of_script = 0;
-    if (1 != sscanf(buf, SCRIPT_OFFSET_FORMAT, &begin_of_script))
+  if ('T' != script_array.mechanism[0]){
+      info->last_error = -__LINE__;
       goto error;
-    int size = begin_of_line - begin_of_script - 1;
-    pinfo->script_size = size;
-
-    // Read the script
-    FILE_GOTO(info, pinfo->binary, begin_of_line, 0);
-    FILE_READ(info, pinfo->binary, buf, end_of_line - begin_of_line, 0);
-    buf[end_of_line - begin_of_line] = '\0';
-
-    // Match the tag
-    FILE_GOTO(info, pinfo->binary, begin_of_line, 0);
-    search_script_backward(info);
-    if (info->last_error) goto error;
-
-    // Use detected script size or set until the end
-    if (pinfo->script_size <= 0)
-      pinfo->script_size = file_size - begin_of_script;
-
-    info->last_error = BINJECT_OK;
   }
- 
-  // all is right 
+
+  int size = -1;
+  int offset = -1;
+
+  if (1 != sscanf(script_array.size, BINJECT_ARRAY_SIZE_FORMAT, &offset)){
+      info->last_error = -__LINE__;
+      goto error;
+  }
+
+  FILE_GOTO_END(info, pinfo->binary, 0);
+  FILE_TELL(info, pinfo->binary, &size, 0);
+  size -= offset;
+
   info->mecha = BINJECT_TAIL_TAG;
+  pinfo->script_offset = offset;
+  pinfo->script_size = size;
+
   verbprint(8, "Tail Tag - Set current mode\n");
-  
   return;
+
 error:
   if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_NO_SCRIPT;
   pinfo->script_size = 0;
@@ -365,6 +291,7 @@ error:
 }
 
 size_t binject_tail_tag_read(binject_info_t* info, char * buffer, size_t maximum) {
+  int position, size;
   private_info_t * pinfo = private_info(info);
   verbprint(8, "Tail Tag - Reading a chunk\n");
 
@@ -379,9 +306,8 @@ size_t binject_tail_tag_read(binject_info_t* info, char * buffer, size_t maximum
     return pinfo->script_size;
   }
 
-  int size = pinfo->script_size;
-  int position = pinfo->script_offset;
-  if (size <= 0 || position <= 0) {
+  position = pinfo->script_offset;
+  if (position <= 0) {
     info->last_error = -__LINE__;
     goto error;
   }
@@ -392,12 +318,12 @@ size_t binject_tail_tag_read(binject_info_t* info, char * buffer, size_t maximum
   FILE_GOTO(info, pinfo->binary, pinfo->aux_counter, 0);
 
   // Load the script
-  if (maximum < size) maximum = size;
+  if (maximum < pinfo->script_size) maximum = pinfo->script_size;
   FILE_READ(info, pinfo->binary, buffer, maximum, 0);
-
-  pinfo->aux_counter += size;
+  pinfo->aux_counter += maximum;
 
   return maximum;
+
 error:
   if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_READ;
   PRINT_MESSAGE(info, "[%d] Can not read the script\n", info->last_error);
@@ -471,9 +397,16 @@ static void binject_inject_tail_tag_close(binject_info_t * info, char * scr_path
   int script_end;
   FILE_TELL(info, out, &script_end, out_path); 
   const int tag_size = sizeof(BINJECT_TAIL_TAG_EDGE) - 1;
-  FILE_PRINT(info, out, out_path, SCRIPT_OFFSET_LINE, binary_size + 2 * tag_size);
 
   info->last_error = BINJECT_OK;
+
+  int max = pinfo->script_offset - (script_array.empty - script_array.size);
+  FILE_GOTO(info, pinfo->out, max, 0);
+  FILE_PRINT(info, pinfo->out, out_path, BINJECT_ARRAY_SIZE_FORMAT, binary_size + 2 * tag_size);
+  FILE_GOTO(info, pinfo->out, pinfo->script_offset, 0);
+  FILE_WRITE(info, pinfo->out, script_array.empty, sizeof(script_array.empty), out_path);
+  FILE_GOTO(info, pinfo->out, max-2, 0);
+  FILE_WRITE(info, pinfo->out, "T", 1, out_path);
 
   return;
 error:
@@ -493,6 +426,11 @@ static void binject_find_array(binject_info_t * info) {
   // no script in the array!
   if (script_array.size[0] == 0) goto error;
 
+  if ('S' != script_array.mechanism[0]){
+    info->last_error = -__LINE__;
+    goto error;
+  }
+
   unsigned int size;
   if (1 != sscanf(script_array.size, BINJECT_ARRAY_SIZE_FORMAT, &size)){
     info->last_error = -__LINE__;
@@ -501,8 +439,8 @@ static void binject_find_array(binject_info_t * info) {
 
   // Zero size means no script
   if (size == 0) {
-    goto error;
     info->last_error = -__LINE__;
+    goto error;
   }
 
   info->mecha = BINJECT_INTERNAL_ARRAY;
@@ -649,6 +587,8 @@ static void binject_inject_array_close(binject_info_t * info, char * scr_path, c
   FILE_PRINT(info, pinfo->out, out_path, BINJECT_ARRAY_SIZE_FORMAT, pinfo->aux_counter);
   FILE_GOTO(info, pinfo->out, pinfo->script_offset, 0);
   FILE_WRITE(info, pinfo->out, script_array.empty, sizeof(script_array.empty), out_path);
+  FILE_GOTO(info, pinfo->out, max-2, 0);
+  FILE_WRITE(info, pinfo->out, "S", 1, out_path);
 
   return;
 error:
