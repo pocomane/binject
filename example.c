@@ -61,7 +61,7 @@ static int binject_main_app_internal_script_handle(binject_info_t * info, int ar
   if (binject_error(status) || script_size != status)
     return -1; // TODO : proper error handle
 
-  printf("A %d byte script was found (dump:)[", script_size);
+  printf("A %d byte script was found (dump:)[", (int)script_size);
   fwrite(script, 1, script_size, stdout);
   printf("]\n");
   return 0;

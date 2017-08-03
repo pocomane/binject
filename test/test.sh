@@ -4,7 +4,7 @@
 # Prepare directory
 
 TEST_DIR="$(readlink -f "$(dirname "$0")")/tmp"
-CC="gcc -std=c99 "
+CC="gcc -std=c99 -Wall "
 
 rm -fR "$TEST_DIR"
 mkdir "$TEST_DIR"

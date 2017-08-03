@@ -79,9 +79,9 @@ typedef struct {
   char last_message[MAX_ERROR_LEN];
 } binject_info_t;
 
-#define BINJECT_INIT {0}
+#define BINJECT_INIT {{0,},}
 
-static int binject_error(binject_response_t e) { return e <= BINJECT_ERROR; }
+int binject_error(binject_response_t e);
 
 // NOTE: path MUST outlive info (path pointer is stored inside info) 
 void binject_binary_path(binject_info_t * info, char * path);

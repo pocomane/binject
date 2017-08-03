@@ -205,7 +205,6 @@ error:
 }
 
 size_t binject_tail_tag_read(binject_info_t* info, char * buffer, size_t maximum) {
-  int position, size;
   private_info_t * pinfo = private_info(info);
   verbprint(8, "Tail Tag - Reading a chunk\n");
 
@@ -220,7 +219,7 @@ size_t binject_tail_tag_read(binject_info_t* info, char * buffer, size_t maximum
     return pinfo->script_size;
   }
 
-  position = pinfo->script_offset;
+  int position = pinfo->script_offset;
   if (position <= 0) {
     info->last_error = -__LINE__;
     goto error;
@@ -274,7 +273,7 @@ error:
 
 static size_t binject_inject_tail_tag_write(binject_info_t * info, const char * buffer, size_t size) {
   private_info_t * pinfo = private_info(info);
-  verbprint(8, "Tail Tag - Write a %d byte chunk\n", size);
+  verbprint(8, "Tail Tag - Write a %d byte chunk\n", (int)size);
 
   // TODO : test multstep data injection !!!!
   // TODO : test attempt to write more data !!!!
@@ -282,7 +281,6 @@ static size_t binject_inject_tail_tag_write(binject_info_t * info, const char * 
   if (!buffer || size<=0) goto error;
 
   FILE * out = pinfo->out;
-  char * out_path = pinfo->path;
 
   FILE_WRITE(info, out, buffer, size, out_path);
 
@@ -388,10 +386,6 @@ size_t binject_array_read(binject_info_t* info, char * buffer, size_t maximum) {
   pinfo->aux_counter += toread;
 
   return toread;
-error:
-  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_READ;
-  PRINT_MESSAGE(info, "[%d] Can not read the script\n", info->last_error);
-  return 0;
 }
 
 // ---------------------------------------------------------------------------------
@@ -401,7 +395,6 @@ static int binject_search_double_tag_forward(binject_info_t * info, const char *
 
   private_info_t * pinfo = private_info(info);
   int match = 0;
-  int deb = -1;
   while (1) {
 
     // Get next char
@@ -461,7 +454,7 @@ error:
 
 static size_t binject_inject_array_write(binject_info_t * info, const char * buffer, size_t size) {
   private_info_t * pinfo = private_info(info);
-  verbprint(8, "Internal Array - Write a %d byte chunk\n", size);
+  verbprint(8, "Internal Array - Write a %d byte chunk\n", (int)size);
 
   // TODO : test multstep data injection !!!!
   // TODO : test attempt to write more data !!!!
@@ -483,10 +476,6 @@ static size_t binject_inject_array_write(binject_info_t * info, const char * buf
   }
 
   return size;
-error:
-  if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_WRITE;
-  PRINT_MESSAGE(info, "[%d] Can not write script chunk\n", info->last_error);
-  return 0;
 }
 
 static void binject_inject_array_close(binject_info_t * info, char * scr_path, char * out_path) {
@@ -528,6 +517,10 @@ void binject_find(binject_info_t * info){
     PRINT_MESSAGE(info, "[%d] Can not find the script\n", info->last_error);
   }
   return;
+}
+
+int binject_error(binject_response_t e) {
+  return e <= BINJECT_ERROR;
 }
 
 size_t binject_read(binject_info_t* info, char * buffer, size_t maximum) {
