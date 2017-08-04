@@ -73,18 +73,31 @@ typedef union {
 } binject_info_hidden_t;
 
 typedef struct {
+  char mechanism[2];
+  char size[BINJECT_ARRAY_SIZE_FORMAT_LENGTH];
+  char edge[2*sizeof(BINJECT_ARRAY_EDGE)-2];
+  char empty[BINJECT_ARRAY_SIZE];
+} script_array_t;
+
+#define BINJECT_STATIC_DATA { \
+  .mechanism = "\0", \
+  .size = "0", \
+  .edge = BINJECT_ARRAY_EDGE BINJECT_ARRAY_EDGE, \
+}
+
+typedef struct {
+  script_array_t * static_data;
   binject_info_hidden_t hidden;
   binject_mechanism_t mecha;
   binject_response_t last_error;
   char last_message[MAX_ERROR_LEN];
 } binject_info_t;
 
-#define BINJECT_INIT {{0,},}
-
 int binject_error(binject_response_t e);
 
+// NOTE: static_data must be static defined to be equal to BINJECT_STATIC_DATA
 // NOTE: path MUST outlive info (path pointer is stored inside info) 
-void binject_binary_path(binject_info_t * info, char * path);
+binject_info_t binject_info_init(script_array_t * static_data, char * path);
 
 void binject_find(binject_info_t * info);
 void binject_inject_start(binject_info_t * info, char * scr_path, char * out_path);
@@ -102,22 +115,6 @@ size_t binject_read(binject_info_t* info, char * buffer, size_t maximum);
 
 // Set the verbosity level. >9 are for debug.
 void binject_set_verbosity(int d);
-
-typedef struct {
-  char mechanism[2];
-  char size[BINJECT_ARRAY_SIZE_FORMAT_LENGTH];
-  char edge[2*sizeof(BINJECT_ARRAY_EDGE)-2];
-  char empty[BINJECT_ARRAY_SIZE];
-} script_array_t;
-
-extern script_array_t script_array;
-
-#define BINJECT_STATIC_DATA() \
-script_array_t script_array = { \
-  .mechanism = "\0", \
-  .size = "0", \
-  .edge = BINJECT_ARRAY_EDGE BINJECT_ARRAY_EDGE, \
-}
 
 #endif // BINJECT_H
 

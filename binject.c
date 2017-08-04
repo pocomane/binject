@@ -146,7 +146,9 @@ error:
 
 #define COMPILE_TIME_CHECK(condition) ((void)sizeof(char[!(condition)?-1:1]))
 
-void binject_binary_path(binject_info_t * info, char * path) {
+binject_info_t binject_info_init(script_array_t * static_data, char * path){
+  binject_info_t result = {0,};
+  binject_info_t* info = &result;
   private_info_t * pinfo = private_info(info);
 
   // Global check. They must be in a function. Placed here to avoid
@@ -158,14 +160,18 @@ void binject_binary_path(binject_info_t * info, char * path) {
   pinfo->path = path;
   pinfo->script_offset = 0;
   pinfo->script_size = 0;
+  info->static_data = static_data;
   info->last_error = BINJECT_OK;
   info->last_message[0] = '\0';
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------------
 // -- Append Mechanism - Read
 
 static void binject_find_tail_tag(binject_info_t * info) {
+  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
   verbprint(8, "Tail Tag - searching script from the bottom\n");
 
@@ -292,6 +298,7 @@ error:
 }
 
 static void binject_inject_tail_tag_close(binject_info_t * info, char * scr_path, char * out_path){
+  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
   verbprint(8, "Tail Tag - Finalizing a %d byte script\n", pinfo->aux_counter);
 
@@ -331,6 +338,7 @@ error:
 // -- Array Mechanism - Read
 
 static void binject_find_array(binject_info_t * info) {
+  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
   verbprint(8, "Internal Array - searching for array boundary\n");
 
@@ -368,6 +376,7 @@ error:
 }
 
 size_t binject_array_read(binject_info_t* info, char * buffer, size_t maximum) {
+  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
   verbprint(8, "Internal Array - Reading a chunk\n");
 
@@ -453,6 +462,7 @@ error:
 }
 
 static size_t binject_inject_array_write(binject_info_t * info, const char * buffer, size_t size) {
+  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
   verbprint(8, "Internal Array - Write a %d byte chunk\n", (int)size);
 
@@ -463,7 +473,7 @@ static size_t binject_inject_array_write(binject_info_t * info, const char * buf
   // verbprint(8, "Tail Tag - Set current mode\n");
 
   if (pinfo->aux_counter + size < sizeof(script_array.empty)) { // maximum script size
-    memcpy(script_array.empty + pinfo->aux_counter, buffer, size);
+    memcpy(info->static_data->empty + pinfo->aux_counter, buffer, size);
     pinfo->aux_counter += size;
 
   } else {
@@ -479,6 +489,7 @@ static size_t binject_inject_array_write(binject_info_t * info, const char * buf
 }
 
 static void binject_inject_array_close(binject_info_t * info, char * scr_path, char * out_path) {
+  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
   int max = pinfo->script_offset - (script_array.empty - script_array.size);
   verbprint(8, "Internal Array - Finalizing a %d byte script at 0x%x\n", pinfo->aux_counter, max);
