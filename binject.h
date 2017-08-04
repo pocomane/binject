@@ -68,7 +68,9 @@ typedef enum {
 typedef union {
   void * force_align;
   char raw[sizeof(struct{
-    void*a; void*b; void* c; int d; int e; int f;
+    void* v[4];
+    int i[3];
+    binject_mechanism_t m;
   })];
 } binject_info_hidden_t;
 
@@ -86,9 +88,7 @@ typedef struct {
 }
 
 typedef struct {
-  script_array_t * static_data;
   binject_info_hidden_t hidden;
-  binject_mechanism_t mecha;
   binject_response_t last_error;
   char last_message[MAX_ERROR_LEN];
 } binject_info_t;

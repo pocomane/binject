@@ -47,12 +47,14 @@
 // -- Utility stuff
 
 typedef struct {
+  script_array_t * static_data;
   FILE * binary;
   FILE * out;
   char * path;
   int aux_counter;
   int script_offset;
   int script_size;
+  binject_mechanism_t mecha;
 } private_info_t;
 
 static private_info_t* private_info(binject_info_t * info) {
@@ -147,7 +149,7 @@ error:
 #define COMPILE_TIME_CHECK(condition) ((void)sizeof(char[!(condition)?-1:1]))
 
 binject_info_t binject_info_init(script_array_t * static_data, char * path){
-  binject_info_t result = {0,};
+  binject_info_t result = {{0,}};
   binject_info_t* info = &result;
   private_info_t * pinfo = private_info(info);
 
@@ -160,19 +162,29 @@ binject_info_t binject_info_init(script_array_t * static_data, char * path){
   pinfo->path = path;
   pinfo->script_offset = 0;
   pinfo->script_size = 0;
-  info->static_data = static_data;
+  pinfo->static_data = static_data;
   info->last_error = BINJECT_OK;
   info->last_message[0] = '\0';
 
   return result;
 }
 
+binject_mechanism_t binject_mechanism_get(binject_info_t * info){
+  private_info_t * pinfo = private_info(info);
+  return pinfo->mecha;
+}
+
+void binject_mechanism_set(binject_info_t * info, binject_mechanism_t mecha){
+  private_info_t * pinfo = private_info(info);
+  pinfo->mecha = mecha;
+}
+
 // ---------------------------------------------------------------------------------
 // -- Append Mechanism - Read
 
 static void binject_find_tail_tag(binject_info_t * info) {
-  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
+  script_array_t script_array = *pinfo->static_data;
   verbprint(8, "Tail Tag - searching script from the bottom\n");
 
   if (!pinfo->binary)
@@ -195,7 +207,7 @@ static void binject_find_tail_tag(binject_info_t * info) {
   FILE_TELL(info, pinfo->binary, &size, 0);
   size -= offset;
 
-  info->mecha = BINJECT_TAIL_TAG;
+  binject_mechanism_set(info, BINJECT_TAIL_TAG);
   pinfo->script_offset = offset;
   pinfo->script_size = size;
 
@@ -298,8 +310,8 @@ error:
 }
 
 static void binject_inject_tail_tag_close(binject_info_t * info, char * scr_path, char * out_path){
-  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
+  script_array_t script_array = *pinfo->static_data;
   verbprint(8, "Tail Tag - Finalizing a %d byte script\n", pinfo->aux_counter);
 
   // TODO : test multstep data injection !!!!
@@ -338,8 +350,8 @@ error:
 // -- Array Mechanism - Read
 
 static void binject_find_array(binject_info_t * info) {
-  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
+  script_array_t script_array = *pinfo->static_data;
   verbprint(8, "Internal Array - searching for array boundary\n");
 
   // A size string starting with '\0' always means
@@ -363,7 +375,7 @@ static void binject_find_array(binject_info_t * info) {
     goto error;
   }
 
-  info->mecha = BINJECT_INTERNAL_ARRAY;
+  binject_mechanism_set(info, BINJECT_INTERNAL_ARRAY);
   verbprint(8, "Internal Array - Set current mode\n");
   pinfo->script_size = size;
   info->last_error = BINJECT_OK;
@@ -376,8 +388,8 @@ error:
 }
 
 size_t binject_array_read(binject_info_t* info, char * buffer, size_t maximum) {
-  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
+  script_array_t script_array = *pinfo->static_data;
   verbprint(8, "Internal Array - Reading a chunk\n");
 
   // TODO : TEST multistep read
@@ -448,13 +460,13 @@ static void binject_inject_array_start(binject_info_t * info, char * scr_path, c
   if (pinfo->script_offset < 0) goto error;
 
   pinfo->aux_counter = 0;
-  info->mecha = BINJECT_INTERNAL_ARRAY;
+  binject_mechanism_set(info, BINJECT_INTERNAL_ARRAY);
   verbprint(8, "Internal Array - Set current mode\n");
 
   return;
 error:
   if (info->last_error == BINJECT_OK) info->last_error = BINJECT_ERROR_READ;
-  info->mecha = BINJECT_TAIL_TAG;
+  binject_mechanism_set(info, BINJECT_TAIL_TAG);
   pinfo->script_size = 0;
   pinfo->script_offset = 0;
   PRINT_MESSAGE(info, "[%d] Can not start injection\n", info->last_error);
@@ -462,23 +474,23 @@ error:
 }
 
 static size_t binject_inject_array_write(binject_info_t * info, const char * buffer, size_t size) {
-  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
+  script_array_t script_array = *pinfo->static_data;
   verbprint(8, "Internal Array - Write a %d byte chunk\n", (int)size);
 
   // TODO : test multstep data injection !!!!
   // TODO : test attempt to write more data !!!!
 
-  //info->mecha = BINJECT_TAIL_TAG;
+  //binject_mechanism_set(info, BINJECT_TAIL_TAG);
   // verbprint(8, "Tail Tag - Set current mode\n");
 
   if (pinfo->aux_counter + size < sizeof(script_array.empty)) { // maximum script size
-    memcpy(info->static_data->empty + pinfo->aux_counter, buffer, size);
+    memcpy(pinfo->static_data->empty + pinfo->aux_counter, buffer, size);
     pinfo->aux_counter += size;
 
   } else {
     // Switch to file append mode
-    info->mecha = BINJECT_TAIL_TAG;
+    binject_mechanism_set(info, BINJECT_TAIL_TAG);
     verbprint(8, "Internal Array - Switching to Tail Tag mode\n");
     int aux = pinfo->aux_counter;
     binject_inject_tail_tag_start(info, "script", "output");
@@ -489,8 +501,8 @@ static size_t binject_inject_array_write(binject_info_t * info, const char * buf
 }
 
 static void binject_inject_array_close(binject_info_t * info, char * scr_path, char * out_path) {
-  script_array_t script_array = *info->static_data;
   private_info_t * pinfo = private_info(info);
+  script_array_t script_array = *pinfo->static_data;
   int max = pinfo->script_offset - (script_array.empty - script_array.size);
   verbprint(8, "Internal Array - Finalizing a %d byte script at 0x%x\n", pinfo->aux_counter, max);
 
@@ -515,12 +527,14 @@ error:
 // -- Mechanism Dispatch / API Functions
 
 void binject_find(binject_info_t * info){
-  binject_mechanism_t * m = &( info->mecha );
+  binject_mechanism_t m;
 
-  if (BINJECT_INTERNAL_ARRAY == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+  m = binject_mechanism_get(info);
+  if (BINJECT_INTERNAL_ARRAY == m || BINJECT_MECHANISM_UNKNOWN == m)
     binject_find_array(info);
 
-  if (BINJECT_TAIL_TAG == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+  m = binject_mechanism_get(info);
+  if (BINJECT_TAIL_TAG == m || BINJECT_MECHANISM_UNKNOWN == m)
     binject_find_tail_tag(info);
 
   if (info->last_error != BINJECT_OK){
@@ -535,9 +549,9 @@ int binject_error(binject_response_t e) {
 }
 
 size_t binject_read(binject_info_t* info, char * buffer, size_t maximum) {
-  binject_mechanism_t * m = &( info->mecha );
   size_t result;
-  switch (*m) {
+
+  switch (binject_mechanism_get(info)) {
 
     break; case BINJECT_INTERNAL_ARRAY: 
       result = binject_array_read(info, buffer, maximum);
@@ -558,11 +572,11 @@ error:
 }
 
 void binject_inject_start(binject_info_t * info, char * scr_path, char * out_path){
+  binject_mechanism_t m;
   verbprint(8, "General - using %s as output file\n", out_path);
-  private_info_t * pinfo = private_info(info);
-  binject_mechanism_t * m = &( info->mecha );
 
   // Open the output file
+  private_info_t * pinfo = private_info(info);
   if (!pinfo->out)
     FILE_OPEN(info, out_path, "wb", &(pinfo->out));
   if (!binject_copy_binary(info, out_path)){
@@ -573,10 +587,12 @@ void binject_inject_start(binject_info_t * info, char * scr_path, char * out_pat
   }
   FILE_GOTO_END(info, pinfo->out, 0);
 
-  if (BINJECT_INTERNAL_ARRAY == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+  m = binject_mechanism_get(info);
+  if (BINJECT_INTERNAL_ARRAY == m || BINJECT_MECHANISM_UNKNOWN == m)
     binject_inject_array_start(info, scr_path, out_path);
 
-  if (BINJECT_TAIL_TAG == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+  m = binject_mechanism_get(info);
+  if (BINJECT_TAIL_TAG == m || BINJECT_MECHANISM_UNKNOWN == m)
     binject_inject_tail_tag_start(info, scr_path, out_path);
 
 error:
@@ -586,13 +602,15 @@ error:
 }
 
 size_t binject_write(binject_info_t * info, const char * buffer, size_t size) {
-  binject_mechanism_t * m = &( info->mecha );
   size_t result = 0;
+  binject_mechanism_t m;
 
-  if (BINJECT_INTERNAL_ARRAY == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+  m = binject_mechanism_get(info);
+  if (BINJECT_INTERNAL_ARRAY == m || BINJECT_MECHANISM_UNKNOWN == m)
     result = binject_inject_array_write(info, buffer, size);
 
-  if (BINJECT_TAIL_TAG == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+  m = binject_mechanism_get(info);
+  if (BINJECT_TAIL_TAG == m || BINJECT_MECHANISM_UNKNOWN == m)
     result = binject_inject_tail_tag_write(info, buffer, size);
 
   if (info->last_error != BINJECT_OK)
@@ -601,15 +619,17 @@ size_t binject_write(binject_info_t * info, const char * buffer, size_t size) {
 }
 
 void binject_inject_close(binject_info_t * info, char * scr_path, char * out_path){
-  binject_mechanism_t * m = &( info->mecha );
-  private_info_t * pinfo = private_info(info);
+  binject_mechanism_t m;
 
-  if (BINJECT_INTERNAL_ARRAY == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+  m = binject_mechanism_get(info);
+  if (BINJECT_INTERNAL_ARRAY == m || BINJECT_MECHANISM_UNKNOWN == m)
     binject_inject_array_close(info, scr_path, out_path);
 
-  if (BINJECT_TAIL_TAG == *m || BINJECT_MECHANISM_UNKNOWN == *m)
+  m = binject_mechanism_get(info);
+  if (BINJECT_TAIL_TAG == m || BINJECT_MECHANISM_UNKNOWN == m)
     binject_inject_tail_tag_close(info, scr_path, out_path);
 
+  private_info_t * pinfo = private_info(info);
   if (pinfo->out) {
     fclose(pinfo->out);
     pinfo->out = 0;
