@@ -4,7 +4,7 @@
 #include <string.h>
 #include "unistd.h"
 
-script_array_t script_array = BINJECT_STATIC_DATA;
+binject_static_data_t static_data = BINJECT_STATIC_DATA;
 
 static int print_help(const char * command){
   printf("\nUsage:\n  %s script.txt\n\n", command);
@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
   int result = 0;
 
   // Open the binary
-  binject_info_t info = binject_info_init(&script_array, argv[0]);
+  binject_info_t info = binject_info_init(&static_data, argv[0]);
   if (info.last_error) {
     printf("%s", info.last_message);
     return -1;

@@ -47,7 +47,7 @@
 // -- Utility stuff
 
 typedef struct {
-  script_array_t * static_data;
+  binject_static_data_t * static_data;
   FILE * binary;
   FILE * out;
   char * path;
@@ -147,7 +147,7 @@ error:
 
 #define COMPILE_TIME_CHECK(condition) ((void)sizeof(char[!(condition)?-1:1]))
 
-binject_info_t binject_info_init(script_array_t * static_data, char * path){
+binject_info_t binject_info_init(binject_static_data_t * static_data, char * path){
   binject_info_t result = {{0,}};
   binject_info_t* info = &result;
   private_info_t * pinfo = private_info(info);
@@ -168,7 +168,7 @@ binject_info_t binject_info_init(script_array_t * static_data, char * path){
   return result;
 }
 
-binject_mechanism_t binject_mechanism_get(binject_info_t * info){
+static binject_mechanism_t binject_mechanism_get(binject_info_t * info){
   private_info_t * pinfo = private_info(info);
   switch (pinfo->static_data->mechanism[0]) {
     break; case 'T': return BINJECT_TAIL_TAG;
@@ -177,7 +177,7 @@ binject_mechanism_t binject_mechanism_get(binject_info_t * info){
   }
 }
 
-void binject_mechanism_set(binject_info_t * info, binject_mechanism_t mecha){
+static void binject_mechanism_set(binject_info_t * info, binject_mechanism_t mecha){
   private_info_t * pinfo = private_info(info);
   switch (mecha) {
     break; case BINJECT_TAIL_TAG: pinfo->static_data->mechanism[0] = 'T';
@@ -191,7 +191,7 @@ void binject_mechanism_set(binject_info_t * info, binject_mechanism_t mecha){
 
 static void binject_find_tail_tag(binject_info_t * info) {
   private_info_t * pinfo = private_info(info);
-  script_array_t script_array = *pinfo->static_data;
+  binject_static_data_t script_array = *pinfo->static_data;
   verbprint(8, "Tail Tag - searching script from the bottom\n");
 
   if (!pinfo->binary)
@@ -229,7 +229,7 @@ error:
   return;
 }
 
-size_t binject_tail_tag_read(binject_info_t* info, char * buffer, size_t maximum) {
+static size_t binject_tail_tag_read(binject_info_t* info, char * buffer, size_t maximum) {
   private_info_t * pinfo = private_info(info);
   verbprint(8, "Tail Tag - Reading a chunk\n");
 
@@ -318,7 +318,7 @@ error:
 
 static void binject_inject_tail_tag_close(binject_info_t * info, char * scr_path, char * out_path){
   private_info_t * pinfo = private_info(info);
-  script_array_t script_array = *pinfo->static_data;
+  binject_static_data_t script_array = *pinfo->static_data;
   verbprint(8, "Tail Tag - Finalizing a %d byte script\n", pinfo->aux_counter);
 
   // TODO : test multstep data injection !!!!
@@ -358,7 +358,7 @@ error:
 
 static void binject_find_array(binject_info_t * info) {
   private_info_t * pinfo = private_info(info);
-  script_array_t script_array = *pinfo->static_data;
+  binject_static_data_t script_array = *pinfo->static_data;
   verbprint(8, "Internal Array - searching for array boundary\n");
 
   // A size string starting with '\0' always means
@@ -394,9 +394,9 @@ error:
   return;
 }
 
-size_t binject_array_read(binject_info_t* info, char * buffer, size_t maximum) {
+static size_t binject_array_read(binject_info_t* info, char * buffer, size_t maximum) {
   private_info_t * pinfo = private_info(info);
-  script_array_t script_array = *pinfo->static_data;
+  binject_static_data_t script_array = *pinfo->static_data;
   verbprint(8, "Internal Array - Reading a chunk\n");
 
   // TODO : TEST multistep read
@@ -482,7 +482,7 @@ error:
 
 static size_t binject_inject_array_write(binject_info_t * info, const char * buffer, size_t size) {
   private_info_t * pinfo = private_info(info);
-  script_array_t script_array = *pinfo->static_data;
+  binject_static_data_t script_array = *pinfo->static_data;
   verbprint(8, "Internal Array - Write a %d byte chunk\n", (int)size);
 
   // TODO : test multstep data injection !!!!
@@ -509,7 +509,7 @@ static size_t binject_inject_array_write(binject_info_t * info, const char * buf
 
 static void binject_inject_array_close(binject_info_t * info, char * scr_path, char * out_path) {
   private_info_t * pinfo = private_info(info);
-  script_array_t script_array = *pinfo->static_data;
+  binject_static_data_t script_array = *pinfo->static_data;
   int max = pinfo->script_offset - (script_array.empty - script_array.size);
   verbprint(8, "Internal Array - Finalizing a %d byte script at 0x%x\n", pinfo->aux_counter, max);
 

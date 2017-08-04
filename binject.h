@@ -78,7 +78,7 @@ typedef struct {
   char size[BINJECT_ARRAY_SIZE_FORMAT_LENGTH];
   char edge[2*sizeof(BINJECT_ARRAY_EDGE)-2];
   char empty[BINJECT_ARRAY_SIZE];
-} script_array_t;
+} binject_static_data_t;
 
 #define BINJECT_STATIC_DATA { \
   .mechanism = "\0", \
@@ -96,7 +96,7 @@ int binject_error(binject_response_t e);
 
 // NOTE: static_data must be static defined to be equal to BINJECT_STATIC_DATA
 // NOTE: path MUST outlive info (path pointer is stored inside info) 
-binject_info_t binject_info_init(script_array_t * static_data, char * path);
+binject_info_t binject_info_init(binject_static_data_t * static_data, char * path);
 
 void binject_find(binject_info_t * info);
 void binject_inject_start(binject_info_t * info, char * scr_path, char * out_path);
