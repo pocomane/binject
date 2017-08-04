@@ -54,7 +54,6 @@ typedef struct {
   int aux_counter;
   int script_offset;
   int script_size;
-  binject_mechanism_t mecha;
 } private_info_t;
 
 static private_info_t* private_info(binject_info_t * info) {
@@ -171,12 +170,20 @@ binject_info_t binject_info_init(script_array_t * static_data, char * path){
 
 binject_mechanism_t binject_mechanism_get(binject_info_t * info){
   private_info_t * pinfo = private_info(info);
-  return pinfo->mecha;
+  switch (pinfo->static_data->mechanism[0]) {
+    break; case 'T': return BINJECT_TAIL_TAG;
+    break; case 'S': return BINJECT_INTERNAL_ARRAY;
+    break; default : return BINJECT_MECHANISM_UNKNOWN;
+  }
 }
 
 void binject_mechanism_set(binject_info_t * info, binject_mechanism_t mecha){
   private_info_t * pinfo = private_info(info);
-  pinfo->mecha = mecha;
+  switch (mecha) {
+    break; case BINJECT_TAIL_TAG: pinfo->static_data->mechanism[0] = 'T';
+    break; case BINJECT_INTERNAL_ARRAY: pinfo->static_data->mechanism[0] = 'S';
+    break; default : pinfo->static_data->mechanism[0] = '\0';
+  }
 }
 
 // ---------------------------------------------------------------------------------

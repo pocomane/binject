@@ -70,7 +70,6 @@ typedef union {
   char raw[sizeof(struct{
     void* v[4];
     int i[3];
-    binject_mechanism_t m;
   })];
 } binject_info_hidden_t;
 
