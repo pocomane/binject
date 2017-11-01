@@ -2,9 +2,23 @@
 #include "binject.h"
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include "unistd.h"
 
-binject_static_data_t static_data = BINJECT_STATIC_DATA;
+// Size of the data for the INTERNAL ARRAY mechanism. It should be
+// a positive integer
+#ifndef BINJECT_ARRAY_SIZE
+#define BINJECT_ARRAY_SIZE (9216)
+#endif // BINJECT_ARRAY_SIZE
+
+static void error_report(int internal_error) {
+  if (internal_error != NO_ERROR)
+    fprintf(stderr, "Error %d\n", internal_error);
+  if (0 != errno)
+    fprintf(stderr, "Error %d: %s\n", errno, strerror(errno));
+}
+
+BINJECT_STATIC_STRING("```replace_data```", BINJECT_ARRAY_SIZE, static_data);
 
 static int print_help(const char * command){
   printf("\nUsage:\n  %s script.txt\n\n", command);
@@ -15,101 +29,138 @@ static int print_help(const char * command){
   return 0;
 }
 
-void binject_main_app_internal_script_inject(binject_info_t * info, int argc, char **argv){
+int binject_main_copy(const char * src, const char * dst){
+  int r = 0;
+  int w = 0;
+  char b[128];
 
-  if (argc < 2) goto error;
-  char * scr_path = argv[1];
+  // Open files
+  FILE * fs = fopen(src, "rb");
+  if (!fs) return ACCESS_ERROR;
+  FILE * fd = fopen(dst, "wb");
+  if (!fd) return ACCESS_ERROR;
+
+  // Copy from source file to destination
+  while (1) {
+    r = fread(b, 1, sizeof(b), fs);
+    if (0 > r) break;
+    w = fwrite(b, 1, r, fd);
+    if (r != sizeof(b) || r != w) break;
+  }
+
+  // Error report
+  error_report(0);
+  fclose(fd);
+  fclose(fs);
+  if (r != w) return ACCESS_ERROR;
+  return NO_ERROR;
+}
+
+int binject_main_app_internal_script_inject(binject_static_t * info, const char * scr_path, const char* bin_path, const char * outpath){
+  int result = ACCESS_ERROR;
 
   // Open the scipt
   FILE * scr = fopen(scr_path, "rb");
-  if (!scr) goto error;
+  if (!scr) goto end;
 
-  if (fseek(scr, 0, SEEK_END)) goto error;
+  // Get the original binary size
+  if (fseek(scr, 0, SEEK_END)) goto end;
   int siz = ftell(scr);
-  if (siz < 0) goto error;
-  if (fseek(scr, 0, SEEK_SET)) goto error;
+  if (siz < 0) goto end;
+  if (fseek(scr, 0, SEEK_SET)) goto end;
 
   int bufsize = siz;
   { // Scope block to avoid goto and variable length issue
     char buf[bufsize];
 
-    // Read the script
-    fread(buf, 1, siz, scr);
-    fclose(scr);
+    // Copy the binary
+    result = binject_main_copy(bin_path, outpath);
+    if (NO_ERROR != result) goto end;
 
-    // Copy the script
-    binject_write(info, buf, siz);
-
-    info->last_error = BINJECT_OK;
+    // Inject the script into the new binary
+    if (0> fread(buf, 1, siz, scr)) goto end;
+    result = binject_step(info, outpath, buf, siz);
+    if (NO_ERROR != result) goto end;
   }
 
-  return;
-error:
-  info->last_error = BINJECT_ERROR;
-  snprintf(info->last_message, sizeof(info->last_message)-1,
-    "error reading the script %s\n", scr_path);
-  return;
+  // Finalize by writing static info into the binary
+  result = binject_done(static_data, outpath);
+
+end:
+  error_report(0);
+  if (scr) fclose(scr);
+  return result;
 }
 
-static int binject_main_app_internal_script_handle(binject_info_t * info, int argc, char **argv) {
+static int binject_main_app_internal_script_handle(binject_static_t * info, int argc, char **argv) {
+  unsigned int size = 0;
+  FILE * f = 0;
 
-  size_t script_size = binject_read(info, 0,0);
-  if (script_size < 0)
-    return -1;
-  char script[script_size];
-  size_t status = binject_read(info, script, script_size);
-  if (binject_error(status) || script_size != status)
-    return -1; // TODO : proper error handle
+  // Get information from static section
+  char * script = binject_info(static_data, &size);
 
-  printf("A %d byte script was found (dump:)[", (int)script_size);
-  fwrite(script, 1, script_size, stdout);
-  printf("]\n");
-  return 0;
+  if (script) {
+    // Script found in the static section
+
+    // Script echo
+    printf("A %d byte script was found (dump:)[", (int)size);
+    int w = fwrite(script, 1, size, stdout);
+    if (w != size) return ACCESS_ERROR;
+    printf("]\n");
+
+  } else {
+    // Script should be at end of the binary
+
+    // Open the binary
+    f = fopen(argv[0], "rb");
+    if (!f) return ACCESS_ERROR;
+
+    // Go at start of the script
+    fseek(f, 0, SEEK_END);
+    unsigned int script_size = ftell(f) - size;
+    if (0 == script_size) return INVALID_RESOURCE_ERROR;
+    char buf[script_size];
+    script = buf;
+    if (0 != fseek(f, size, SEEK_SET)) return ACCESS_ERROR;
+
+    // Script echo
+    if (0> fread(buf, 1, size, f)) return ACCESS_ERROR;
+    printf("A %d byte script was found (dump:)[", (int)script_size);
+    if (fwrite(script, 1, script_size, stdout) != script_size) return ACCESS_ERROR;
+    printf("]\n");
+
+    fclose(f);
+  }
+
+  return NO_ERROR;
 }
 
 int main(int argc, char **argv) {
-  int result = 0;
+  int result = GENERIC_ERROR;
 
-  // Open the binary
-  binject_info_t info = binject_info_init(&static_data, argv[0]);
-  if (info.last_error) {
-    printf("%s", info.last_message);
-    return -1;
-  }
-
-  binject_find(&info);
+  // Get information from static section
+  unsigned int size = 0;
+  binject_info(static_data, &size);
 
   // Run the proper tool
-  if (info.last_error == BINJECT_OK) {
-    result = binject_main_app_internal_script_handle(&info, argc, argv);
+  if (size > 0) {
+    // No script found: inject
+    result = binject_main_app_internal_script_handle(static_data, argc, argv);
 
   } else if (argc < 2 || argv[1][0] == '\0') {
+    // No arguments: print help
     print_help(argv[0]);
-    info.last_error = BINJECT_OK;
+    result = NO_ERROR;
 
   } else {
-
-    // TODO : handle command line arguments !!!
-
-    // Calculate the output path 
-    const int pathlen = strlen(argv[1]);
-    char OUTPUT_FILE[pathlen+10];
-    strncpy(OUTPUT_FILE, argv[1], pathlen);
-    strncpy(OUTPUT_FILE + pathlen, ".exe", 4);
-    OUTPUT_FILE[pathlen+4] = '\0';
-
-    // Inject !
-    binject_inject_start(&info, argv[1], OUTPUT_FILE);
-    binject_main_app_internal_script_inject(&info, argc, argv); // TODO : HANDLE ERROR ?!!
-    binject_inject_close(&info, argv[1], OUTPUT_FILE);
+    // Script found: handle it
+    if (argc < 2) { print_help(argv[0]); goto end; }
+    result = binject_main_app_internal_script_inject(static_data, argv[1], argv[0], "injed.exe");
   }
 
-  if (info.last_error != BINJECT_OK) {
-    fprintf(stderr, "Error %s\n", info.last_message);
-    return info.last_error;
-  } else if (result) {
-    fprintf(stderr, "Error [%d] generic\n", -__LINE__);
-  }
+end:
+  if (result != NO_ERROR) fprintf(stderr, "Error %d\n", result);
+  error_report(0);
   return result;
 }
 
