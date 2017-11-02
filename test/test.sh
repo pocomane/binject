@@ -5,8 +5,16 @@ echo "Running some tests (note: error states are not currently tested)."
 #############################################################
 # Prepare directory
 
+# Linux
+# SHEXT="so"
+# CC_ARCH_FLAG="-fPIC"
+
+# Windows
+SHEXT="dll"
+CC_ARCH_FLAG=""
+
 TEST_DIR="$(readlink -f "$(dirname "$0")")/tmp"
-CC="gcc -std=c99 -Wall "
+CC="gcc -std=c99 -Wall $CC_ARCH_FLAG "
 
 rm -fR "$TEST_DIR"
 mkdir "$TEST_DIR"
@@ -26,9 +34,9 @@ cp ./tail_static.exe ./tail_static_bis.exe
 #############################################################
 # Compile shared
 
-$CC -shared -fPIC -o ./libbinject_array.so ../../binject.c || exit -1
+$CC -shared -fPIC -o ./libbinject_array.$SHEXT ../../binject.c || exit -1
 $CC -o ./array_shared.exe ../../example.c -L ./ -lbinject_array || exit -1
-strip ./libbinject_array.so
+strip ./libbinject_array.$SHEXT
 strip ./array_shared.exe
 
 cp ./array_shared.exe ./array_shared_bis.exe
@@ -37,6 +45,8 @@ export LD_LIBRARY_PATH="./"
 
 #############################################################
 # Test working
+
+SEDSIZCOL='s:^[^ ]* *[^ ]* *[^ ]* *[^ ]* *[^ ]* *\([^ ]*\) *.*$:\1:g'
 
 should_be() {
   if [ "$2" = "=" -a "$1" = "$3" ] ; then return ; fi
@@ -87,14 +97,14 @@ test_working_sequence array_shared_bis.exe
 ls -l > my_size_info.txt
 grep '.exe.emb$' my_size_info.txt
 
-ARRAY=$(grep 'array_shared.exe.emb$' my_size_info.txt | awk '{print $5}')
-ARRAYBIS=$(grep 'array_shared_bis.exe.emb$' my_size_info.txt | awk '{print $5}')
+ARRAY=$(grep 'array_shared.exe.emb$' my_size_info.txt | sed "$SEDSIZCOL")
+ARRAYBIS=$(grep 'array_shared_bis.exe.emb$' my_size_info.txt | sed "$SEDSIZCOL")
 
 # If the array method was chosen, the size of the exe is always the same
 should_be "$ARRAY" = "$ARRAYBIS"
 
-TAIL=$(grep 'tail_static.exe.emb$' my_size_info.txt | awk '{print $5}')
-TAILBIS=$(grep 'tail_static_bis.exe.emb$' my_size_info.txt | awk '{print $5}')
+TAIL=$(grep 'tail_static.exe.emb$' my_size_info.txt | sed "$SEDSIZCOL")
+TAILBIS=$(grep 'tail_static_bis.exe.emb$' my_size_info.txt | sed "$SEDSIZCOL")
 
 # If the tail method was chosen, the size of the exe depend on the embeded script
 should_be "$TAIL" != "$TAILBIS"
@@ -102,7 +112,7 @@ should_be "$TAIL" != "$TAILBIS"
 #############################################################
 # Test shared
 
-rm *.so
+rm *.$SHEXT
 ./array_shared.exe.emb > array_shared.exe.empty.rpt 2> ./array_shared.exe.error.rpt
 
 RES=$(cat array_shared.exe.empty.rpt)
