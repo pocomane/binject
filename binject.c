@@ -13,12 +13,12 @@ struct binject_static_s {
   char start_tag[1];
 };
 
-struct binject_data_s {
+typedef struct {
   unsigned int tail_position;
   unsigned int len;
   unsigned int max;
   char raw[1];
-};
+} binject_data_t;
 
 static long int binject_find_tag(FILE* f, const char* tag, size_t tagsize){
   int c = '\n';
@@ -118,23 +118,24 @@ int binject_step(binject_static_t * DS, const char * binary_path, const char * d
   binject_data_t * toinj = (binject_data_t *)binject_data(DS);
 
   if (binject_does_use_tail(DS)) {
+      // Tail mode
       return binject_tail_append(0, binary_path, data, r);
 
   } else {
     if ((long)toinj->len + (long)r < (long)toinj->max-1) {
+      // Static arry mode
       memcpy(toinj->raw + toinj->len, data, r);
       toinj->len += r;
       return NO_ERROR;
 
     } else {
+      // Switch to tail mode
       binject_use_tail(DS);
       unsigned int * pos = &(( (binject_data_t *) binject_data(DS) ) -> tail_position);
       if (*pos > 0) pos = NULL;
-      int resulta = binject_tail_append(pos, binary_path, toinj->raw, toinj->len);
-      toinj->len = 0;
-      int resultb = binject_tail_append(pos, binary_path, data, r);
-      if (NO_ERROR != resulta) return resulta;
-      return resultb;
+      int result = binject_tail_append(pos, binary_path, toinj->raw, toinj->len);
+      if (NO_ERROR != result) return result;
+      return binject_tail_append(pos, binary_path, data, r);
     }
   }
 }
@@ -143,18 +144,71 @@ int binject_done(binject_static_t * DS, const char * binary_path){
   return binject_inject(DS, binary_path);
 }
 
-char * binject_info(binject_static_t * DS, unsigned int * sizeinfo){
+char * binject_info(binject_static_t * DS, unsigned int * script_size, unsigned int * file_offset){
+
+  if (script_size) *script_size = 0;
+  if (file_offset) *file_offset = 0;
 
   binject_data_t * data = (binject_data_t*) binject_data(DS);
   if (binject_does_use_tail(DS)) {
 
-    if (sizeinfo) *sizeinfo = data->tail_position;
+    if (file_offset) *file_offset = data->tail_position;
     return NULL;
 
   } else {
-    if (sizeinfo) *sizeinfo = data->len;
+    if (script_size) *script_size = data->len;
     return data->raw;
   }
+}
+
+// --------------------------------------------------------------------
+
+int binject_aux_tail_get(const char * binary_path, char * buffer, unsigned int size, unsigned int offset){
+
+  // Open file
+  FILE * f = fopen(binary_path, "rb");
+  if (!f) return ACCESS_ERROR;
+  if (0 != fseek(f, offset, SEEK_SET)) return ACCESS_ERROR;
+
+  // Read data
+  int actread = fread(buffer, 1, size, f);
+  if (0> actread && actread != size) return ACCESS_ERROR;
+
+  // Calc remaining bytes
+  if (0 != fseek(f, 0, SEEK_END)) return ACCESS_ERROR;
+  int result = ftell(f) - offset - actread;
+
+  // TODO :  close file on error ? it could override errno !
+  fclose(f);
+  return result;
+}
+
+int binject_aux_file_copy(const char * src, const char * dst){
+  int r = 0;
+  int w = 0;
+  char b[128];
+
+  // Open files
+  FILE * fs = fopen(src, "rb");
+  if (!fs) return ACCESS_ERROR;
+  FILE * fd = fopen(dst, "wb");
+  if (!fd) return ACCESS_ERROR;
+
+  // Copy from source file to destination
+  while (1) {
+    r = fread(b, 1, sizeof(b), fs);
+    if (0 > r) break;
+    w = fwrite(b, 1, r, fd);
+    if (r != sizeof(b) || r != w) break;
+  }
+
+  // Error report
+  if (r != w) return ACCESS_ERROR;
+
+  // TODO :  close file on error ? it could override errno !
+  fclose(fd);
+  fclose(fs);
+  return NO_ERROR;
 }
 
 // --------------------------------------------------------------------

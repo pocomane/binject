@@ -20,7 +20,7 @@ static void error_report(int internal_error) {
 
 BINJECT_STATIC_STRING("```replace_data```", BINJECT_ARRAY_SIZE, static_data);
 
-static int print_help(const char * command){
+static int aux_print_help(const char * command){
   printf("\nUsage:\n  %s script.txt\n\n", command);
   printf("script.txt.exe executable will be generated or overwritten.\n");
   printf("script.txt.exe will print to the stdout an embedded copy of script.txt.\n\n");
@@ -29,34 +29,23 @@ static int print_help(const char * command){
   return 0;
 }
 
-int binject_main_copy(const char * src, const char * dst){
-  int r = 0;
-  int w = 0;
-  char b[128];
-
-  // Open files
-  FILE * fs = fopen(src, "rb");
-  if (!fs) return ACCESS_ERROR;
-  FILE * fd = fopen(dst, "wb");
-  if (!fd) return ACCESS_ERROR;
-
-  // Copy from source file to destination
-  while (1) {
-    r = fread(b, 1, sizeof(b), fs);
-    if (0 > r) break;
-    w = fwrite(b, 1, r, fd);
-    if (r != sizeof(b) || r != w) break;
-  }
-
-  // Error report
-  error_report(0);
-  fclose(fd);
-  fclose(fs);
-  if (r != w) return ACCESS_ERROR;
-  return NO_ERROR;
+static char * aux_script_prepare(char * buf, int * off, int * siz){
+  *off = *siz; // buffer processing finished
+  return buf;
 }
 
-int binject_main_app_internal_script_inject(binject_static_t * info, const char * scr_path, const char* bin_path, const char * outpath){
+static int aux_script_run(const char * scr, int size, int argc, char ** argv){
+  // Script echo
+  printf("A %d byte script was found (dump:)[", size);
+  int w = fwrite(scr, 1, size, stdout);
+  if (w != size) return ACCESS_ERROR;
+  printf("]\n");
+  return 0;
+}
+
+// --------------------------------------------------------------------
+
+static int binject_main_app_internal_script_inject(binject_static_t * info, const char * scr_path, const char* bin_path, const char * outpath){
   int result = ACCESS_ERROR;
 
   // Open the scipt
@@ -70,21 +59,28 @@ int binject_main_app_internal_script_inject(binject_static_t * info, const char 
   if (fseek(scr, 0, SEEK_SET)) goto end;
 
   int bufsize = siz;
+  int off = 0;
   { // Scope block to avoid goto and variable length issue
     char buf[bufsize];
 
     // Copy the binary
-    result = binject_main_copy(bin_path, outpath);
+    result = binject_aux_file_copy(bin_path, outpath);
     if (NO_ERROR != result) goto end;
 
-    // Inject the script into the new binary
+    // Prepare the script for the injection
     if (0> fread(buf, 1, siz, scr)) goto end;
-    result = binject_step(info, outpath, buf, siz);
-    if (NO_ERROR != result) goto end;
+    while (off >=0 && off < siz) {
+      char * injdat = buf;
+      injdat = aux_script_prepare(injdat, &off, &siz);
+
+      // Inject the partial script
+      result = binject_step(info, outpath, injdat, siz);
+      if (NO_ERROR != result) goto end;
+    }
   }
 
   // Finalize by writing static info into the binary
-  result = binject_done(static_data, outpath);
+  result = binject_done(info, outpath);
 
 end:
   error_report(0);
@@ -92,44 +88,23 @@ end:
   return result;
 }
 
-static int binject_main_app_internal_script_handle(binject_static_t * info, int argc, char **argv) {
-  unsigned int size = 0;
-  FILE * f = 0;
+static int binject_main_app_internal_script_handle(binject_static_t * info, const char* bin_path, int argc, char **argv) {
+  unsigned int size;
+  unsigned int offset;
 
   // Get information from static section
-  char * script = binject_info(static_data, &size);
+  char * script = binject_info(info, &size, &offset);
 
   if (script) {
     // Script found in the static section
-
-    // Script echo
-    printf("A %d byte script was found (dump:)[", (int)size);
-    int w = fwrite(script, 1, size, stdout);
-    if (w != size) return ACCESS_ERROR;
-    printf("]\n");
+    return aux_script_run(script, size, argc, argv);
 
   } else {
     // Script should be at end of the binary
-
-    // Open the binary
-    f = fopen(argv[0], "rb");
-    if (!f) return ACCESS_ERROR;
-
-    // Go at start of the script
-    fseek(f, 0, SEEK_END);
-    unsigned int script_size = ftell(f) - size;
-    if (0 == script_size) return INVALID_RESOURCE_ERROR;
+    unsigned int script_size = binject_aux_tail_get(bin_path, 0, 0, offset);
     char buf[script_size];
-    script = buf;
-    if (0 != fseek(f, size, SEEK_SET)) return ACCESS_ERROR;
-
-    // Script echo
-    if (0> fread(buf, 1, size, f)) return ACCESS_ERROR;
-    printf("A %d byte script was found (dump:)[", (int)script_size);
-    if (fwrite(script, 1, script_size, stdout) != script_size) return ACCESS_ERROR;
-    printf("]\n");
-
-    fclose(f);
+    binject_aux_tail_get(bin_path, buf, script_size, offset);
+    return aux_script_run(buf, script_size, argc, argv);
   }
 
   return NO_ERROR;
@@ -140,21 +115,22 @@ int main(int argc, char **argv) {
 
   // Get information from static section
   unsigned int size = 0;
-  binject_info(static_data, &size);
+  unsigned int offset = 0;
+  binject_info(static_data, &size, &offset);
 
   // Run the proper tool
-  if (size > 0) {
-    // No script found: inject
-    result = binject_main_app_internal_script_handle(static_data, argc, argv);
+  if (size > 0 || offset > 0) {
+    // Script found: handle it
+    result = binject_main_app_internal_script_handle(static_data, argv[0], argc, argv);
 
   } else if (argc < 2 || argv[1][0] == '\0') {
     // No arguments: print help
-    print_help(argv[0]);
+    aux_print_help(argv[0]);
     result = NO_ERROR;
 
   } else {
-    // Script found: handle it
-    if (argc < 2) { print_help(argv[0]); goto end; }
+    // No script found: inject
+    if (argc < 2) { aux_print_help(argv[0]); goto end; }
     result = binject_main_app_internal_script_inject(static_data, argv[1], argv[0], "injed.exe");
   }
 

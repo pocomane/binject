@@ -11,8 +11,6 @@ All the code is in the Public Domain, so:
 - You have no legal obligation to do anything else.
 - There is NO WARRANTY of any kind.
 
-NOTE: The code is still a bit messy, but it works.
-
 Build
 ------
 
