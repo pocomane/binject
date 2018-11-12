@@ -6,10 +6,8 @@ This is an utility for embed a script in an executable. It is designed as a
 "Library" so you can provide the parsing function or manipulate the data before
 the injection. A complete but simple "Echo" example is provided for reference.
 
-All the code is in the Public Domain, so:
-- You can do anything you want with it.
-- You have no legal obligation to do anything else.
-- There is NO WARRANTY of any kind.
+This software is released under the [Unlicense](http://unlicense.org), so the
+legal statement in COPYING.txt applies.
 
 Build
 ------
